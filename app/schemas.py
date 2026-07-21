@@ -135,3 +135,16 @@ class StrategyConfigOut(BaseModel):
     risk_profile_id: uuid.UUID
     path: list[dict]
     created_at: datetime
+
+    # ============================================================
+# Behavior Engine
+# ============================================================
+class BehaviorAnalysisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: uuid.UUID
+    mode: str
+    trades: list[dict]
+    metrics: dict
+    started_at: datetime
+    ended_at: datetime | None

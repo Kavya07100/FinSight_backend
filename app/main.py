@@ -1,4 +1,3 @@
-from .strategy_agent import generate_strategy
 import uuid
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
@@ -11,6 +10,8 @@ from .portfolio_service import compute_risk_profile, RiskProfileInput
 from .backtest_engine import Trade, run_backtest
 from .price_data import get_price_data
 from .learning_agent import generate_answer
+from .behavior_engine import analyze_simulation
+from .strategy_agent import generate_strategy
 
 app = FastAPI(title="FinSight API", version="0.1.0")
 
@@ -24,9 +25,6 @@ def create_user(payload: schemas.UserCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    # NOTE: placeholder hashing. Swap for passlib/bcrypt before this
-    # touches anything real -- storing plaintext-derived hashes like
-    # this is fine for local dev only.
     user = models.User(
         email=payload.email,
         hashed_password=f"unhashed:{payload.password}",
@@ -55,11 +53,6 @@ def compute_and_store_risk_profile(
     payload: schemas.RiskProfileRequest,
     db: Session = Depends(get_db),
 ):
-    """
-    Computes a new risk profile version and stores it. Never overwrites
-    a previous version -- see schema.sql comments for why (loop needs
-    history, and strategy_configs reference a specific risk_profile_id).
-    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -99,7 +92,6 @@ def compute_and_store_risk_profile(
 
 @app.get("/users/{user_id}/risk-profile", response_model=schemas.RiskProfileOut)
 def get_latest_risk_profile(user_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Returns the most recent risk profile version for a user."""
     profile = (
         db.query(models.RiskProfile)
         .filter(models.RiskProfile.user_id == user_id)
@@ -113,7 +105,6 @@ def get_latest_risk_profile(user_id: uuid.UUID, db: Session = Depends(get_db)):
 
 @app.get("/users/{user_id}/risk-profile/history", response_model=list[schemas.RiskProfileOut])
 def get_risk_profile_history(user_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Full version history -- useful once the Behavior Engine loop triggers re-scoring."""
     profiles = (
         db.query(models.RiskProfile)
         .filter(models.RiskProfile.user_id == user_id)
@@ -136,12 +127,6 @@ def run_sandbox_simulation(
     payload: schemas.SandboxSimulationRequest,
     db: Session = Depends(get_db),
 ):
-    """
-    Sandbox mode: user picks tickers/dates/trades themselves, we backtest
-    it against real historical prices and log the session. strategy_config_id
-    stays NULL here -- sandbox sessions aren't tied to a Strategy Agent path
-    (see schema.sql comment on simulation_logs.strategy_config_id).
-    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -160,11 +145,6 @@ def run_sandbox_simulation(
 
     result = run_backtest(trades, prices, payload.starting_cash)
 
-    # Benchmark comparison: what would buy-and-hold on a broad index
-    # (e.g. SPY) have returned over the same period, with the same
-    # starting cash? This reuses run_backtest itself -- buy-and-hold is
-    # just a single buy trade on day one and no other activity, so no
-    # new engine logic is needed, only a different trade list.
     benchmark_metrics = None
     benchmark_prices = get_price_data(
         [payload.benchmark_ticker], payload.start_date, payload.end_date
@@ -190,9 +170,6 @@ def run_sandbox_simulation(
                 "total_return_pct": benchmark_result["total_return_pct"],
             }
 
-    # JSONB columns need JSON-safe values. date objects aren't natively
-    # serializable, so convert them to ISO strings (e.g. "2023-01-03")
-    # before storing -- otherwise this insert would throw an error.
     trades_json = [
         {
             "ticker": t.ticker,
@@ -232,18 +209,61 @@ def run_sandbox_simulation(
 
 
 # ============================================================
+# Behavior Engine
+# ============================================================
+@app.post(
+    "/users/{user_id}/simulate/{log_id}/analyze",
+    response_model=schemas.BehaviorAnalysisOut,
+)
+def analyze_simulation_behavior(
+    user_id: uuid.UUID,
+    log_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Analyzes a completed simulation session's trading behavior.
+    Computes behavioral metrics (panic sell rate, trade frequency,
+    diversification etc.) and generates LLM feedback.
+    Writes results back into simulation_logs.metrics under a "behavior" key.
+    """
+    log = db.query(models.SimulationLog).filter(
+        models.SimulationLog.id == log_id,
+        models.SimulationLog.user_id == user_id,
+    ).first()
+    if not log:
+        raise HTTPException(status_code=404, detail="Simulation log not found")
+
+    profile = (
+        db.query(models.RiskProfile)
+        .filter(models.RiskProfile.user_id == user_id)
+        .order_by(models.RiskProfile.version.desc())
+        .first()
+    )
+    risk_category = profile.category if profile else "moderate"
+
+    result = analyze_simulation(
+        trades=log.trades,
+        metrics=log.metrics or {},
+        risk_category=risk_category,
+    )
+
+    updated_metrics = {**(log.metrics or {}), **result}
+
+    log.metrics = updated_metrics
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+# ============================================================
 # Learning Agent (RAG)
 # ============================================================
 @app.post("/learning/ask", response_model=schemas.LearningAskResponse)
 def ask_learning_agent(payload: schemas.LearningAskRequest):
-    """
-    Answers a user's question using only the curated financial literacy
-    content, grounded via RAG. No user_id needed here -- this endpoint
-    doesn't touch user-specific data or write anything to the database,
-    it's a stateless question-in, answer-out call.
-    """
     result = generate_answer(payload.question)
     return schemas.LearningAskResponse(answer=result["answer"], sources=result["sources"])
+
 
 # ============================================================
 # Strategy Agent
@@ -252,19 +272,12 @@ def ask_learning_agent(payload: schemas.LearningAskRequest):
 def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db)):
     """
     Generates a new learning path for the user using their latest risk profile.
-    Stores it as a new version in strategy_configs (never overwrites old ones --
-    same versioning pattern as risk_profiles, since Behavior Engine loop will
-    call this again after feedback and needs both versions to exist).
-
-    No request body needed: the agent reads the user's latest risk profile
-    from the DB itself. On first run, behavior_score is None. Behavior Engine
-    will call this endpoint again later and we'll pass its output in then.
+    Stores it as a new version in strategy_configs (never overwrites old ones).
     """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Must have a risk profile before generating a strategy
     profile = (
         db.query(models.RiskProfile)
         .filter(models.RiskProfile.user_id == user_id)
@@ -274,11 +287,9 @@ def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db
     if not profile:
         raise HTTPException(
             status_code=400,
-            detail="No risk profile found. Complete onboarding (POST /users/{user_id}/risk-profile) first.",
+            detail="No risk profile found. Complete onboarding first.",
         )
 
-    # Convert SQLAlchemy model to plain dict for the agent
-    # (the agent is pure logic -- no SQLAlchemy objects inside it)
     risk_profile_dict = {
         "risk_score": profile.risk_score,
         "category": profile.category,
@@ -289,11 +300,22 @@ def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db
         "score_breakdown": profile.score_breakdown,
     }
 
-    # behavior_score is None on first run.
-    # When Behavior Engine exists, retrieve it here and pass it in.
-    path = generate_strategy(risk_profile_dict, behavior_score=None)
+    # Look up most recent behavior scores from simulation logs
+    latest_log = (
+        db.query(models.SimulationLog)
+        .filter(
+            models.SimulationLog.user_id == user_id,
+            models.SimulationLog.metrics.isnot(None),
+        )
+        .order_by(models.SimulationLog.started_at.desc())
+        .first()
+    )
+    behavior_score = (
+        latest_log.metrics.get("behavior") if latest_log and latest_log.metrics else None
+    )
 
-    # Version bump: same pattern as risk_profiles
+    path = generate_strategy(risk_profile_dict, behavior_score=behavior_score)
+
     latest_version = db.query(func.max(models.StrategyConfig.version)).filter(
         models.StrategyConfig.user_id == user_id
     ).scalar()
@@ -313,7 +335,6 @@ def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db
 
 @app.get("/users/{user_id}/strategy", response_model=schemas.StrategyConfigOut)
 def get_latest_strategy(user_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Returns the most recent strategy version for a user."""
     config = (
         db.query(models.StrategyConfig)
         .filter(models.StrategyConfig.user_id == user_id)
