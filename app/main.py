@@ -24,20 +24,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Onboarding doesn't collect these yet -- fixed placeholders until the
+# frontend adds real inputs for them (see RiskProfileRequest docstring).
+DEFAULT_TIME_HORIZON_YEARS = 10.0
+DEFAULT_PCT_INCOME_INVESTABLE = 20.0
+
 
 # ============================================================
 # Users
 # ============================================================
 @app.post("/users", response_model=schemas.UserOut, status_code=201)
 def create_user(payload: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(models.User).filter(models.User.email == payload.email).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
-
+    # Onboarding doesn't collect email/password (no real auth yet), so
+    # generate placeholders to satisfy the users table's NOT NULL/unique
+    # constraints. Matches the existing "unhashed:" placeholder scheme --
+    # not real auth either way.
     user = models.User(
-        email=payload.email,
-        hashed_password=f"unhashed:{payload.password}",
+        email=f"{uuid.uuid4()}@onboarding.local",
+        hashed_password=f"unhashed:{uuid.uuid4()}",
         full_name=payload.full_name,
+        age=payload.age,
+        monthly_income=payload.monthly_income,
+        current_savings=payload.current_savings,
     )
     db.add(user)
     db.commit()
@@ -66,13 +74,15 @@ def compute_and_store_risk_profile(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    annual_income = payload.monthly_income * 12
+
     result = compute_risk_profile(RiskProfileInput(
-        income=payload.income,
-        savings=payload.savings,
-        goal=payload.goal,
-        time_horizon_years=payload.time_horizon_years,
-        pct_income_investable=payload.pct_income_investable,
-        risk_tolerance_input=payload.risk_tolerance_input,
+        income=annual_income,
+        savings=payload.current_savings,
+        goal=payload.investment_goal,
+        time_horizon_years=DEFAULT_TIME_HORIZON_YEARS,
+        pct_income_investable=DEFAULT_PCT_INCOME_INVESTABLE,
+        risk_tolerance_input=payload.risk_tolerance,
     ))
 
     latest_version = db.query(func.max(models.RiskProfile.version)).filter(
@@ -83,12 +93,12 @@ def compute_and_store_risk_profile(
     profile = models.RiskProfile(
         user_id=user_id,
         version=next_version,
-        income=payload.income,
-        savings=payload.savings,
-        goal=payload.goal,
-        time_horizon_years=payload.time_horizon_years,
-        pct_income_investable=payload.pct_income_investable,
-        risk_tolerance_input=payload.risk_tolerance_input,
+        income=annual_income,
+        savings=payload.current_savings,
+        goal=payload.investment_goal,
+        time_horizon_years=DEFAULT_TIME_HORIZON_YEARS,
+        pct_income_investable=DEFAULT_PCT_INCOME_INVESTABLE,
+        risk_tolerance_input=payload.risk_tolerance,
         risk_score=result.risk_score,
         category=result.category,
         score_breakdown=result.score_breakdown,

@@ -4,27 +4,34 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
     full_name: str | None = None
+    age: int = Field(gt=0)
+    monthly_income: float = Field(ge=0)
+    current_savings: float = Field(ge=0)
 
 
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
-    email: EmailStr
     full_name: str | None
+    age: int | None
+    monthly_income: float | None
+    current_savings: float | None
     created_at: datetime
 
 
 class RiskProfileRequest(BaseModel):
-    """Matches Portfolio Service input contract from the architecture doc."""
-    income: float = Field(gt=0, description="Annual income")
-    savings: float = Field(ge=0, description="Current savings / liquid assets")
-    goal: str
-    time_horizon_years: float = Field(gt=0)
-    pct_income_investable: float = Field(ge=0, le=100)
-    risk_tolerance_input: int = Field(ge=1, le=5, description="1=very conservative, 5=very aggressive")
+    """
+    Onboarding-facing shape. time_horizon_years and pct_income_investable
+    aren't collected by onboarding yet, so compute_and_store_risk_profile()
+    fills them with DEFAULT_TIME_HORIZON_YEARS / DEFAULT_PCT_INCOME_INVESTABLE
+    (see main.py) before calling the Portfolio Service.
+    """
+    age: int = Field(gt=0)
+    monthly_income: float = Field(ge=0)
+    current_savings: float = Field(ge=0)
+    investment_goal: str
+    risk_tolerance: int = Field(ge=1, le=5, description="1=very conservative, 5=very aggressive")
 
 
 class RiskProfileOut(BaseModel):

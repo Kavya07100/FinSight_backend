@@ -16,6 +16,9 @@ class User(Base):
     email = Column(Text, unique=True, nullable=False)
     hashed_password = Column(Text, nullable=False)
     full_name = Column(Text)
+    age = Column(Integer)
+    monthly_income = Column(Numeric(12, 2))
+    current_savings = Column(Numeric(14, 2))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 

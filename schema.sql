@@ -19,6 +19,9 @@ CREATE TABLE users (
     email           TEXT UNIQUE NOT NULL,
     hashed_password TEXT NOT NULL,
     full_name       TEXT,
+    age             INT,
+    monthly_income  NUMERIC(12,2),
+    current_savings NUMERIC(14,2),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
