@@ -23,9 +23,12 @@ from app.database import engine
 # Starter set: individual stocks (for single-stock lessons) + broad ETFs
 # (for diversification lessons). Add more tickers here any time -- nothing
 # else in the codebase needs to change when you do.
-TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ", "VOO"]
+TICKERS = [
+    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TATAMOTORS.NS",
+    "WIPRO.NS", "BAJFINANCE.NS", "NIFTYBEES.NS", "SPY"
+]
 
-START_DATE = "2019-01-01"
+START_DATE = "2022-01-01"
 END_DATE = "2024-12-31"
 
 
