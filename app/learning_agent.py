@@ -16,6 +16,7 @@ import os
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from groq import Groq
 from sqlalchemy import text
 
 from app.database import engine
@@ -23,9 +24,10 @@ from app.database import engine
 load_dotenv()
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 EMBEDDING_MODEL = "gemini-embedding-001"
-GENERATION_MODEL = "gemini-3.5-flash"
+GENERATION_MODEL = "llama-3.3-70b-versatile"
 EMBEDDING_DIMENSIONS = 1536
 
 
@@ -103,13 +105,13 @@ def generate_answer(question: str, top_k: int = 3) -> dict:
         f"Question: {question}"
     )
 
-    response = client.models.generate_content(
+    response = groq_client.chat.completions.create(
         model=GENERATION_MODEL,
-        contents=prompt,
+        messages=[{"role": "user", "content": prompt}],
     )
 
     return {
-        "answer": response.text,
+        "answer": response.choices[0].message.content,
         "sources": [r["title"] for r in retrieved],
     }
 
