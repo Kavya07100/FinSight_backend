@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -14,6 +15,14 @@ from .behavior_engine import analyze_simulation
 from .strategy_agent import generate_strategy
 
 app = FastAPI(title="FinSight API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ============================================================
