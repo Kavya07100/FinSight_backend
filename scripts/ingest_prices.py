@@ -24,8 +24,8 @@ from app.database import engine
 # (for diversification lessons). Add more tickers here any time -- nothing
 # else in the codebase needs to change when you do.
 TICKERS = [
-    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TATAMOTORS.NS",
-    "WIPRO.NS", "BAJFINANCE.NS", "NIFTYBEES.NS", "SPY"
+    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TMPV.NS",
+    "WIPRO.NS", "BAJFINANCE.NS", "NIFTYBEES.NS", "SBIN.NS", "SPY"
 ]
 
 START_DATE = "2022-01-01"
