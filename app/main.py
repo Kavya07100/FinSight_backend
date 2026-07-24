@@ -61,19 +61,86 @@ def get_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
     return user
 
 
-# ============================================================
-# Portfolio Service (rules-based risk scoring)
-# ============================================================
-@app.post("/users/{user_id}/risk-profile", response_model=schemas.RiskProfileOut, status_code=201)
-def compute_and_store_risk_profile(
+@app.put("/users/{user_id}", response_model=schemas.UserOut)
+def update_user(
     user_id: uuid.UUID,
-    payload: schemas.RiskProfileRequest,
+    payload: schemas.UserUpdate,
     db: Session = Depends(get_db),
 ):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if payload.full_name is not None:
+        user.full_name = payload.full_name
+    if payload.age is not None:
+        user.age = payload.age
+    if payload.monthly_income is not None:
+        user.monthly_income = payload.monthly_income
+    if payload.current_savings is not None:
+        user.current_savings = payload.current_savings
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    if payload.investment_goal is not None or payload.risk_tolerance is not None:
+        latest_profile = (
+            db.query(models.RiskProfile)
+            .filter(models.RiskProfile.user_id == user_id)
+            .order_by(models.RiskProfile.version.desc())
+            .first()
+        )
+
+        resolved_goal = (
+            payload.investment_goal if payload.investment_goal is not None
+            else (latest_profile.goal if latest_profile else None)
+        )
+        resolved_risk_tolerance = (
+            payload.risk_tolerance if payload.risk_tolerance is not None
+            else (latest_profile.risk_tolerance_input if latest_profile else None)
+        )
+
+        if (
+            user.age is None or user.monthly_income is None or user.current_savings is None
+            or resolved_goal is None or resolved_risk_tolerance is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "age, monthly_income, current_savings, investment_goal, and "
+                    "risk_tolerance must all be set (either already on the user, "
+                    "from a prior risk profile, or in this request) to recompute "
+                    "a risk profile."
+                ),
+            )
+
+        _create_risk_profile_version(
+            db,
+            user_id,
+            schemas.RiskProfileRequest(
+                age=user.age,
+                monthly_income=float(user.monthly_income),
+                current_savings=float(user.current_savings),
+                investment_goal=resolved_goal,
+                risk_tolerance=resolved_risk_tolerance,
+            ),
+        )
+
+    return user
+
+
+# ============================================================
+# Portfolio Service (rules-based risk scoring)
+# ============================================================
+def _create_risk_profile_version(
+    db: Session, user_id: uuid.UUID, payload: schemas.RiskProfileRequest
+) -> models.RiskProfile:
+    """
+    Shared by POST /users/{user_id}/risk-profile and PUT /users/{user_id}
+    (the latter re-scores whenever investment_goal or risk_tolerance changes).
+    Caller is responsible for confirming the user exists first.
+    """
     annual_income = payload.monthly_income * 12
 
     result = compute_risk_profile(RiskProfileInput(
@@ -107,6 +174,19 @@ def compute_and_store_risk_profile(
     db.commit()
     db.refresh(profile)
     return profile
+
+
+@app.post("/users/{user_id}/risk-profile", response_model=schemas.RiskProfileOut, status_code=201)
+def compute_and_store_risk_profile(
+    user_id: uuid.UUID,
+    payload: schemas.RiskProfileRequest,
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return _create_risk_profile_version(db, user_id, payload)
 
 
 @app.get("/users/{user_id}/risk-profile", response_model=schemas.RiskProfileOut)

@@ -20,6 +20,15 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    age: int | None = Field(default=None, gt=0)
+    monthly_income: float | None = Field(default=None, ge=0)
+    current_savings: float | None = Field(default=None, ge=0)
+    investment_goal: str | None = None
+    risk_tolerance: int | None = Field(default=None, ge=1, le=5)
+
+
 class RiskProfileRequest(BaseModel):
     """
     Onboarding-facing shape. time_horizon_years and pct_income_investable
@@ -41,6 +50,8 @@ class RiskProfileOut(BaseModel):
     version: int
     risk_score: int
     category: str
+    goal: str
+    risk_tolerance_input: int
     time_horizon_years: float
     score_breakdown: dict
     computed_at: datetime
