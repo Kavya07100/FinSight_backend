@@ -199,6 +199,7 @@ def run():
                     errors += 1
 
     print(f"\nDone. Inserted: {inserted}, Skipped: {skipped}, Errors: {errors}")
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}
 
 
 if __name__ == "__main__":

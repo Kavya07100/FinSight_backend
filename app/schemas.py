@@ -195,6 +195,32 @@ class PortfolioOut(BaseModel):
 
 
 # ============================================================
+# News
+# ============================================================
+class NewsItemOut(BaseModel):
+    """
+    embedded_content stores the real publication name and article URL
+    embedded inside `content` text (not in dedicated columns) -- GET /news
+    parses them back out. `content` here is the cleaned article text with
+    that "(Source: ... Read more: ...)" suffix stripped off; the frontend
+    truncates it for the card view and shows the full text on "Read more".
+    """
+    id: uuid.UUID
+    title: str
+    content: str
+    source: str
+    url: str
+    tags: list[str]
+    created_at: datetime
+
+
+class NewsRefreshOut(BaseModel):
+    inserted: int
+    skipped: int
+    errors: int
+
+
+# ============================================================
 # Behavior Engine
 # ============================================================
 class BehaviorAnalysisOut(BaseModel):

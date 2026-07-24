@@ -544,6 +544,20 @@ def get_transactions(user_id: uuid.UUID, db: Session = Depends(get_db)):
     )
 
 
+@app.post("/users/{user_id}/reset-portfolio")
+def reset_portfolio(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    db.query(models.PortfolioHolding).filter(models.PortfolioHolding.user_id == user_id).delete()
+    db.query(models.Transaction).filter(models.Transaction.user_id == user_id).delete()
+    db.query(models.SimulationLog).filter(models.SimulationLog.user_id == user_id).delete()
+    db.commit()
+
+    return {"message": "Portfolio reset successfully"}
+
+
 @app.get("/users/{user_id}/simulations/latest", response_model=schemas.SimulationResultOut)
 def get_latest_simulation(user_id: uuid.UUID, db: Session = Depends(get_db)):
     log = (
