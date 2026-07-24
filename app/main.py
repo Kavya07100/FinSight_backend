@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -44,13 +44,18 @@ COMPANY_NAMES = {
 }
 
 
-def _get_latest_price(db: Session, ticker: str) -> float | None:
-    latest = (
-        db.query(models.PriceHistory)
-        .filter(models.PriceHistory.ticker == ticker)
-        .order_by(models.PriceHistory.date.desc())
-        .first()
-    )
+def _get_latest_price(db: Session, ticker: str, as_of: date | None = None) -> float | None:
+    """
+    Without as_of: latest known close for the ticker.
+    With as_of: closest available close on or before that date (the nearest
+    trading day at/before it, since as_of itself may be a weekend/holiday
+    with no row) -- used to price a transaction at its actual trade_date
+    instead of today's price.
+    """
+    query = db.query(models.PriceHistory).filter(models.PriceHistory.ticker == ticker)
+    if as_of is not None:
+        query = query.filter(models.PriceHistory.date <= as_of)
+    latest = query.order_by(models.PriceHistory.date.desc()).first()
     return float(latest.close) if latest else None
 
 
@@ -64,13 +69,12 @@ def _record_transaction_and_update_holding(
 ) -> None:
     """
     Called once per trade after a sandbox simulation succeeds. Records a
-    Transaction and upserts portfolio_holdings. Uses the LATEST close price
-    in price_history (not the historical price on trade_date) as the
-    recorded transaction price, per spec -- the simulation itself already
-    used the historical price for its own math; this is what the Portfolio
-    page shows as "what you'd pay/receive if you did this trade today."
+    Transaction and upserts portfolio_holdings, priced at the actual close
+    on trade_date (nearest available trading day at/before it) -- not
+    today's price. Using today's price for both the buy price AND the
+    current price would make every position's P&L trivially 0%.
     """
-    price = _get_latest_price(db, ticker)
+    price = _get_latest_price(db, ticker, as_of=trade_date)
     if price is None:
         return  # no price data at all for this ticker -- nothing to record against
 
