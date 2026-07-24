@@ -15,6 +15,7 @@ ONLY file that needs to change -- price_history's shape stays the same, so
 backtest_engine.py and price_data.py don't care where the rows came from.
 """
 
+import math
 import yfinance as yf
 from datetime import date as date_cls
 from sqlalchemy import text
@@ -47,7 +48,25 @@ def ingest():
                 continue
 
             rows_done = 0
+            rows_skipped = 0
             for date, row in df.iterrows():
+                open_ = float(row["Open"].iloc[0]) if hasattr(row["Open"], "iloc") else float(row["Open"])
+                high = float(row["High"].iloc[0]) if hasattr(row["High"], "iloc") else float(row["High"])
+                low = float(row["Low"].iloc[0]) if hasattr(row["Low"], "iloc") else float(row["Low"])
+                close = float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"])
+                volume = int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"])
+
+                if any(math.isnan(v) for v in (open_, high, low, close)):
+                    # yfinance occasionally returns an incomplete bar --
+                    # most often for the most recent trading day while it's
+                    # still mid-session -- with NaN OHLC values. Postgres's
+                    # NUMERIC type will happily store 'NaN', but it then
+                    # poisons any backtest whose trades touch that date:
+                    # NaN + anything = NaN, and it never recovers for the
+                    # rest of that run.
+                    rows_skipped += 1
+                    continue
+
                 # ON CONFLICT here uses the UNIQUE(ticker, date) constraint
                 # already in schema.sql -- re-running this script just
                 # updates existing rows instead of erroring or duplicating.
@@ -65,17 +84,18 @@ def ingest():
                     {
                         "ticker": ticker,
                         "date": date.date(),
-                        "open": float(row["Open"].iloc[0]) if hasattr(row["Open"], "iloc") else float(row["Open"]),
-                        "high": float(row["High"].iloc[0]) if hasattr(row["High"], "iloc") else float(row["High"]),
-                        "low": float(row["Low"].iloc[0]) if hasattr(row["Low"], "iloc") else float(row["Low"]),
-                        "close": float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"]),
-                        "volume": int(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else int(row["Volume"]),
+                        "open": open_,
+                        "high": high,
+                        "low": low,
+                        "close": close,
+                        "volume": volume,
                     },
                 )
                 rows_done += 1
 
             conn.commit()
-            print(f"  Inserted/updated {rows_done} rows for {ticker}")
+            skip_note = f" ({rows_skipped} skipped for NaN OHLC)" if rows_skipped else ""
+            print(f"  Inserted/updated {rows_done} rows for {ticker}{skip_note}")
 
     print("Done.")
 
