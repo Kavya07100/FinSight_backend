@@ -3,3 +3,7 @@ uvicorn[standard]
 sqlalchemy
 psycopg2-binary
 pydantic[email]
+python-dotenv
+google-genai
+groq
+yfinance
