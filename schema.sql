@@ -147,6 +147,42 @@ CREATE TABLE simulation_logs (
 CREATE INDEX idx_simulation_logs_user ON simulation_logs (user_id, started_at DESC);
 
 -- ============================================================
+-- PORTFOLIO HOLDINGS (Portfolio Engine: current position per ticker)
+-- ============================================================
+-- One row per (user, ticker) currently held -- NOT versioned/history like
+-- risk_profiles/strategy_configs, since a holding is a running total that
+-- gets mutated in place as trades come in. transactions (below) is where
+-- the history lives.
+CREATE TABLE portfolio_holdings (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ticker          TEXT NOT NULL,
+    company_name    TEXT,
+    quantity        INT NOT NULL,
+    avg_buy_price   NUMERIC(14,4) NOT NULL,
+
+    UNIQUE (user_id, ticker)
+);
+
+-- ============================================================
+-- TRANSACTIONS (Portfolio Engine: full buy/sell history)
+-- ============================================================
+CREATE TABLE transactions (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ticker          TEXT NOT NULL,
+    company_name    TEXT,
+    action          TEXT NOT NULL CHECK (action IN ('buy', 'sell')),
+    quantity        INT NOT NULL,
+    price           NUMERIC(14,4) NOT NULL,
+    total_value     NUMERIC(14,2) NOT NULL,
+    trade_date      DATE NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_transactions_user_created ON transactions (user_id, created_at DESC);
+
+-- ============================================================
 -- EMBEDDED CONTENT (for Learning Agent's RAG store)
 -- ============================================================
 -- Not used by Portfolio Service, but the doc asks for this table

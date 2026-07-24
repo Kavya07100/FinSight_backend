@@ -89,6 +89,34 @@ class SimulationLog(Base):
     ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
+class PortfolioHolding(Base):
+    __tablename__ = "portfolio_holdings"
+    __table_args__ = (UniqueConstraint("user_id", "ticker"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    ticker = Column(Text, nullable=False)
+    company_name = Column(Text)
+    quantity = Column(Integer, nullable=False)
+    avg_buy_price = Column(Numeric(14, 4), nullable=False)
+
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    __table_args__ = (CheckConstraint("action IN ('buy', 'sell')"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    ticker = Column(Text, nullable=False)
+    company_name = Column(Text)
+    action = Column(Text, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    price = Column(Numeric(14, 4), nullable=False)
+    total_value = Column(Numeric(14, 2), nullable=False)
+    trade_date = Column(Date, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class EmbeddedContent(Base):
     __tablename__ = "embedded_content"
 

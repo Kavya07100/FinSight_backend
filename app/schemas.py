@@ -155,6 +155,46 @@ class StrategyConfigOut(BaseModel):
     created_at: datetime
 
     # ============================================================
+# Portfolio Engine
+# ============================================================
+class HoldingOut(BaseModel):
+    """
+    Built from a PortfolioHolding row plus live price_history lookups --
+    current_price/current_value/pnl_pct aren't stored, they're computed
+    per-request in GET /users/{user_id}/portfolio.
+    """
+    id: uuid.UUID
+    ticker: str
+    company_name: str | None
+    quantity: int
+    avg_buy_price: float
+    current_price: float
+    current_value: float
+    pnl_pct: float
+
+
+class TransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    ticker: str
+    company_name: str | None
+    action: str
+    quantity: int
+    price: float
+    total_value: float
+    trade_date: date
+    created_at: datetime
+
+
+class PortfolioOut(BaseModel):
+    holdings: list[HoldingOut]
+    total_value: float
+    total_invested: float
+    overall_return_pct: float
+    today_pnl: float
+
+
+# ============================================================
 # Behavior Engine
 # ============================================================
 class BehaviorAnalysisOut(BaseModel):

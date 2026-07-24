@@ -29,6 +29,99 @@ app.add_middleware(
 DEFAULT_TIME_HORIZON_YEARS = 10.0
 DEFAULT_PCT_INCOME_INVESTABLE = 20.0
 
+# Market Watch's tradable universe -- keep in sync with MARKET_STOCKS in
+# finsight/app/simulate/page.tsx and TICKERS in scripts/ingest_prices.py.
+COMPANY_NAMES = {
+    "RELIANCE.NS": "Reliance Industries",
+    "HDFCBANK.NS": "HDFC Bank",
+    "INFY.NS": "Infosys",
+    "TMPV.NS": "Tata Motors",
+    "WIPRO.NS": "Wipro",
+    "BAJFINANCE.NS": "Bajaj Finance",
+    "NIFTYBEES.NS": "Nifty 50 ETF",
+    "SBIN.NS": "State Bank of India",
+    "SPY": "S&P 500 ETF",
+}
+
+
+def _get_latest_price(db: Session, ticker: str) -> float | None:
+    latest = (
+        db.query(models.PriceHistory)
+        .filter(models.PriceHistory.ticker == ticker)
+        .order_by(models.PriceHistory.date.desc())
+        .first()
+    )
+    return float(latest.close) if latest else None
+
+
+def _record_transaction_and_update_holding(
+    db: Session,
+    user_id: uuid.UUID,
+    ticker: str,
+    action: str,
+    quantity: int,
+    trade_date,
+) -> None:
+    """
+    Called once per trade after a sandbox simulation succeeds. Records a
+    Transaction and upserts portfolio_holdings. Uses the LATEST close price
+    in price_history (not the historical price on trade_date) as the
+    recorded transaction price, per spec -- the simulation itself already
+    used the historical price for its own math; this is what the Portfolio
+    page shows as "what you'd pay/receive if you did this trade today."
+    """
+    price = _get_latest_price(db, ticker)
+    if price is None:
+        return  # no price data at all for this ticker -- nothing to record against
+
+    company_name = COMPANY_NAMES.get(ticker, ticker)
+
+    db.add(models.Transaction(
+        user_id=user_id,
+        ticker=ticker,
+        company_name=company_name,
+        action=action,
+        quantity=quantity,
+        price=price,
+        total_value=price * quantity,
+        trade_date=trade_date,
+    ))
+
+    holding = (
+        db.query(models.PortfolioHolding)
+        .filter(
+            models.PortfolioHolding.user_id == user_id,
+            models.PortfolioHolding.ticker == ticker,
+        )
+        .first()
+    )
+
+    if action == "buy":
+        if holding:
+            new_quantity = holding.quantity + quantity
+            holding.avg_buy_price = (
+                (float(holding.avg_buy_price) * holding.quantity) + (price * quantity)
+            ) / new_quantity
+            holding.quantity = new_quantity
+        else:
+            db.add(models.PortfolioHolding(
+                user_id=user_id,
+                ticker=ticker,
+                company_name=company_name,
+                quantity=quantity,
+                avg_buy_price=price,
+            ))
+    elif action == "sell" and holding:
+        remaining = holding.quantity - quantity
+        if remaining <= 0:
+            db.delete(holding)  # fully closed (or oversold) -- drop the position
+        else:
+            holding.quantity = remaining
+    # else: selling a ticker with no existing holding -- transaction is
+    # still recorded above, but there's no position to reduce.
+
+    db.commit()
+
 
 # ============================================================
 # Users
@@ -304,6 +397,12 @@ def run_sandbox_simulation(
     db.add(log)
     db.commit()
     db.refresh(log)
+
+    for t in payload.trades:
+        _record_transaction_and_update_holding(
+            db, user_id, t.ticker, t.action, t.quantity, t.trade_date
+        )
+
     return log
 
 
@@ -352,6 +451,94 @@ def analyze_simulation_behavior(
     db.add(log)
     db.commit()
     db.refresh(log)
+    return log
+
+
+# ============================================================
+# Portfolio Engine
+# ============================================================
+@app.get("/users/{user_id}/portfolio", response_model=schemas.PortfolioOut)
+def get_portfolio(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    holdings = (
+        db.query(models.PortfolioHolding)
+        .filter(models.PortfolioHolding.user_id == user_id)
+        .all()
+    )
+
+    holdings_out = []
+    total_value = 0.0
+    total_invested = 0.0
+    today_pnl = 0.0
+
+    for h in holdings:
+        # Latest close = current_price; the one before it = "yesterday's"
+        # close, used to derive today_pnl (not specified explicitly in the
+        # spec's formula list, so defined here as the mark-to-market move
+        # since the previous available trading day).
+        recent_prices = (
+            db.query(models.PriceHistory)
+            .filter(models.PriceHistory.ticker == h.ticker)
+            .order_by(models.PriceHistory.date.desc())
+            .limit(2)
+            .all()
+        )
+        avg_buy_price = float(h.avg_buy_price)
+        current_price = float(recent_prices[0].close) if recent_prices else avg_buy_price
+        previous_price = float(recent_prices[1].close) if len(recent_prices) > 1 else current_price
+
+        current_value = h.quantity * current_price
+        invested = h.quantity * avg_buy_price
+        pnl_pct = ((current_price - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price else 0.0
+
+        holdings_out.append(schemas.HoldingOut(
+            id=h.id,
+            ticker=h.ticker,
+            company_name=h.company_name,
+            quantity=h.quantity,
+            avg_buy_price=avg_buy_price,
+            current_price=current_price,
+            current_value=current_value,
+            pnl_pct=pnl_pct,
+        ))
+
+        total_value += current_value
+        total_invested += invested
+        today_pnl += h.quantity * (current_price - previous_price)
+
+    overall_return_pct = (
+        ((total_value - total_invested) / total_invested) * 100 if total_invested else 0.0
+    )
+
+    return schemas.PortfolioOut(
+        holdings=holdings_out,
+        total_value=total_value,
+        total_invested=total_invested,
+        overall_return_pct=overall_return_pct,
+        today_pnl=today_pnl,
+    )
+
+
+@app.get("/users/{user_id}/transactions", response_model=list[schemas.TransactionOut])
+def get_transactions(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    return (
+        db.query(models.Transaction)
+        .filter(models.Transaction.user_id == user_id)
+        .order_by(models.Transaction.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+
+@app.get("/users/{user_id}/simulations/latest", response_model=schemas.SimulationResultOut)
+def get_latest_simulation(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    log = (
+        db.query(models.SimulationLog)
+        .filter(models.SimulationLog.user_id == user_id)
+        .order_by(models.SimulationLog.started_at.desc())
+        .first()
+    )
+    if not log:
+        raise HTTPException(status_code=404, detail="No simulations found for this user")
     return log
 
 
