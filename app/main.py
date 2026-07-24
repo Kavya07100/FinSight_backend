@@ -383,6 +383,17 @@ def run_sandbox_simulation(
             {"date": row["date"].isoformat(), "value": row["value"]}
             for row in result["daily_values"]
         ],
+        "executed_trades": [
+            {
+                "ticker": t["ticker"],
+                "action": t["action"],
+                "quantity": t["quantity"],
+                "trade_date": t["trade_date"].isoformat(),
+                "price": t["price"],
+                "cost": t["cost"],
+            }
+            for t in result["executed_trades"]
+        ],
         "benchmark": benchmark_metrics,
         "outperformance_pct": (
             result["total_return_pct"] - benchmark_metrics["total_return_pct"]

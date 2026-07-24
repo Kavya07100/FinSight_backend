@@ -46,7 +46,17 @@ def run_backtest(
             "final_value": float,
             "total_return_pct": float,
             "max_drawdown_pct": float,
+            "executed_trades": [{"ticker", "action", "quantity", "trade_date",
+                                  "price", "cost"}, ...],
         }
+
+    executed_trades records the REAL execution price/cost per trade (as
+    opposed to the caller-supplied Trade list, which has neither) -- callers
+    that dump a lump sum of cash upfront for many trades (e.g. a SIP) need
+    this to tell "cash actually deployed so far" apart from cash still
+    sitting idle waiting for a future trade date. Without it, portfolio
+    value (cash + holdings) looks inflated relative to what's actually
+    been invested at any past checkpoint.
     """
     # Reshape prices into {date: {ticker: close}} for fast lookup per day
     prices_by_date: dict[date, dict[str, float]] = {}
@@ -85,6 +95,7 @@ def run_backtest(
     holdings: dict[str, int] = {}  # ticker -> shares currently held
 
     daily_values = []
+    executed_trades = []
     peak_value = starting_cash
     max_drawdown = 0.0
 
@@ -103,6 +114,14 @@ def run_backtest(
             elif t.action == "sell":
                 cash += cost
                 holdings[t.ticker] = holdings.get(t.ticker, 0) - t.quantity
+            executed_trades.append({
+                "ticker": t.ticker,
+                "action": t.action,
+                "quantity": t.quantity,
+                "trade_date": day,  # actual execution day, post-snap -- may differ from t.trade_date
+                "price": price,
+                "cost": cost,
+            })
 
         # 2. Mark-to-market: value the ENTIRE portfolio at today's close prices
         holdings_value = sum(
@@ -125,6 +144,7 @@ def run_backtest(
         "final_value": final_value,
         "total_return_pct": total_return_pct,
         "max_drawdown_pct": max_drawdown * 100,
+        "executed_trades": executed_trades,
     }
 
 
