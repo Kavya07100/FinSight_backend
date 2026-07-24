@@ -16,6 +16,7 @@ backtest_engine.py and price_data.py don't care where the rows came from.
 """
 
 import yfinance as yf
+from datetime import date as date_cls
 from sqlalchemy import text
 
 from app.database import engine
@@ -29,7 +30,10 @@ TICKERS = [
 ]
 
 START_DATE = "2022-01-01"
-END_DATE = "2024-12-31"
+# Computed at run time, not hardcoded -- the frontend's simulate page always
+# requests "1 year ago through today," so a fixed END_DATE silently goes
+# stale and every simulation 400s once "today" moves past it.
+END_DATE = date_cls.today().isoformat()
 
 
 def ingest():
