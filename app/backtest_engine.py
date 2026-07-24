@@ -13,7 +13,7 @@ Why this is separate from the DB/API layer:
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 
@@ -53,10 +53,33 @@ def run_backtest(
     for p in prices:
         prices_by_date.setdefault(p.trade_date, {})[p.ticker] = p.close
 
+    available_dates = sorted(prices_by_date.keys())
+
+    def _snap_to_trading_day(target: date) -> date | None:
+        """
+        Callers often pick a trade_date (e.g. "6 months ago") that lands on a
+        weekend/holiday with no price row -- trades on those days would
+        otherwise silently never execute. Snap to the nearest trading day:
+        prefer the next one forward, within 7 days; if none exists that soon,
+        fall back to the most recent trading day before it. Returns None only
+        if there's no trading day available at all (empty price data).
+        """
+        if target in prices_by_date:
+            return target
+        for offset in range(1, 8):
+            candidate = target + timedelta(days=offset)
+            if candidate in prices_by_date:
+                return candidate
+        earlier = [d for d in available_dates if d < target]
+        return max(earlier) if earlier else None
+
     # Reshape trades into {date: [Trade, ...]} so we know what to execute each day
     trades_by_date: dict[date, list[Trade]] = {}
     for t in trades:
-        trades_by_date.setdefault(t.trade_date, []).append(t)
+        snapped_date = _snap_to_trading_day(t.trade_date)
+        if snapped_date is None:
+            continue  # no trading day available near this date at all
+        trades_by_date.setdefault(snapped_date, []).append(t)
 
     cash = starting_cash
     holdings: dict[str, int] = {}  # ticker -> shares currently held
