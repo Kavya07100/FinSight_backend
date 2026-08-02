@@ -46,49 +46,65 @@ COMPANY_NAMES = {
     "SPY": "S&P 500 ETF",
 }
 
+# Market Watch's tradable list on the simulate page -- 8 tickers, no SPY
+# (SPY is only used as the backtest benchmark, never shown/tradable here).
+MARKET_WATCH_TICKERS = [
+    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TMPV.NS",
+    "WIPRO.NS", "BAJFINANCE.NS", "NIFTYBEES.NS", "SBIN.NS",
+]
+
 # Simple in-process cache -- Yahoo Finance rate-limits/blocks callers that
 # hit it on every page load, and Market Watch is read by every user viewing
 # the simulate page. A module-level dict is enough here since this is a
 # single-process dev/demo deployment (no shared cache across workers).
 MARKET_PRICES_CACHE_TTL_SECONDS = 300
-_market_prices_cache: dict = {"data": None, "fetched_at": 0.0}
+_market_prices_cache: dict = {"data": {}, "fetched_at": 0.0}
 
 
 @app.get("/market/prices")
 def get_market_prices():
     now = time.time()
     cached = _market_prices_cache["data"]
-    if cached is not None and now - _market_prices_cache["fetched_at"] < MARKET_PRICES_CACHE_TTL_SECONDS:
+    if cached and now - _market_prices_cache["fetched_at"] < MARKET_PRICES_CACHE_TTL_SECONDS:
         return cached
 
-    prices = {}
-    for ticker, name in COMPANY_NAMES.items():
-        try:
-            fast_info = yf.Ticker(ticker).fast_info
-            last_price = fast_info["lastPrice"]
-            previous_close = fast_info["previousClose"]
-            change_pct = (
-                ((last_price - previous_close) / previous_close) * 100
-                if previous_close
-                else 0.0
-            )
-            prices[ticker] = {
-                "price": round(float(last_price), 2),
-                "change_pct": round(float(change_pct), 2),
-                "name": name,
-            }
-        except Exception:
-            # Skip tickers Yahoo fails on this cycle rather than failing the
-            # whole response -- stale cached data (if any) is better than none.
-            continue
+    fresh = {}
+    try:
+        df = yf.download(MARKET_WATCH_TICKERS, period="2d", interval="1d", progress=False)
+        for ticker in MARKET_WATCH_TICKERS:
+            try:
+                closes = df["Close"][ticker].dropna()
+                if len(closes) < 2:
+                    continue
+                today_close = float(closes.iloc[-1])
+                yesterday_close = float(closes.iloc[-2])
+                change_pct = (today_close - yesterday_close) / yesterday_close * 100
+                fresh[ticker] = {
+                    "name": COMPANY_NAMES[ticker],
+                    "price": round(today_close, 2),
+                    "change_pct": round(change_pct, 2),
+                }
+            except Exception:
+                # This ticker's columns were missing/unusable -- fall through
+                # to the cached-value-or-skip merge below.
+                continue
+    except Exception:
+        # Whole batch call failed (e.g. network down) -- fresh stays empty,
+        # merge below falls back to cache for every ticker.
+        pass
 
-    if prices:
-        _market_prices_cache["data"] = prices
-        _market_prices_cache["fetched_at"] = now
-        return prices
+    # Per-ticker fallback: prefer freshly fetched data, else last cached
+    # value for that ticker, else omit it entirely.
+    merged = {}
+    for ticker in MARKET_WATCH_TICKERS:
+        if ticker in fresh:
+            merged[ticker] = fresh[ticker]
+        elif ticker in cached:
+            merged[ticker] = cached[ticker]
 
-    # Nothing fetched this cycle -- serve stale cache rather than an empty response.
-    return cached or {}
+    _market_prices_cache["data"] = merged
+    _market_prices_cache["fetched_at"] = now
+    return merged
 
 
 def _get_latest_price(db: Session, ticker: str, as_of: date | None = None) -> float | None:
