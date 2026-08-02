@@ -176,20 +176,44 @@ SCENARIO_DATE_RANGES = {
 # trading days to pick the first N from, regardless of holidays.
 CHALLENGE_SCENARIOS = [
     # Easy difficulty -- bull markets
-    {"id": "bull_2023", "difficulty": "easy", "start": "2023-01-02", "end": "2023-06-30", "days": 60},
-    {"id": "bull_2024", "difficulty": "easy", "start": "2024-01-02", "end": "2024-06-30", "days": 60},
+    {
+        "id": "bull_2023", "difficulty": "easy", "start": "2023-01-02", "end": "2023-06-30", "days": 60,
+        "context": "India's post-COVID recovery continued into 2023, with strong FII inflows and resilient corporate earnings driving a steady rally through the first half of the year.",
+    },
+    {
+        "id": "bull_2024", "difficulty": "easy", "start": "2024-01-02", "end": "2024-06-30", "days": 60,
+        "context": "Indian markets extended their multi-year rally into 2024, hitting fresh record highs, though a sharp swing followed the general election results in early June before markets steadied.",
+    },
 
     # Medium difficulty -- mixed markets
-    {"id": "mixed_2023h2", "difficulty": "medium", "start": "2023-07-01", "end": "2023-12-31", "days": 60},
-    {"id": "mixed_2024h2", "difficulty": "medium", "start": "2024-07-01", "end": "2024-12-31", "days": 60},
+    {
+        "id": "mixed_2023h2", "difficulty": "medium", "start": "2023-07-01", "end": "2023-12-31", "days": 60,
+        "context": "India's market showed selective growth in the second half of 2023 -- large caps outperformed mid-caps, and sector rotation created both opportunities and traps.",
+    },
+    {
+        "id": "mixed_2024h2", "difficulty": "medium", "start": "2024-07-01", "end": "2024-12-31", "days": 60,
+        "context": "Markets pulled back sharply from record highs in late 2024 as heavy foreign investor selling took hold, with large caps and mid-caps diverging through the final months of the year.",
+    },
 
     # Hard difficulty -- corrections
-    {"id": "crash_2022h1", "difficulty": "hard", "start": "2022-01-03", "end": "2022-06-30", "days": 60},
-    {"id": "crash_2022h2", "difficulty": "hard", "start": "2022-07-01", "end": "2022-12-30", "days": 60},
+    {
+        "id": "crash_2022h1", "difficulty": "hard", "start": "2022-01-03", "end": "2022-06-30", "days": 60,
+        "context": "Global inflation hit 40-year highs. The US Federal Reserve began aggressive rate hikes. FIIs pulled billions from emerging markets including India. The Sensex fell sharply through the first half of 2022.",
+    },
+    {
+        "id": "crash_2022h2", "difficulty": "hard", "start": "2022-07-01", "end": "2022-12-30", "days": 60,
+        "context": "Markets stabilized and staged a strong recovery in the second half of 2022 as the earlier correction eased, though global rate-hike uncertainty kept volatility elevated.",
+    },
 
     # Expert -- high volatility mixed
-    {"id": "volatile_2022q1", "difficulty": "expert", "start": "2022-01-03", "end": "2022-03-31", "days": 40},
-    {"id": "volatile_2024q4", "difficulty": "expert", "start": "2024-10-01", "end": "2024-12-31", "days": 40},
+    {
+        "id": "volatile_2022q1", "difficulty": "expert", "start": "2022-01-03", "end": "2022-03-31", "days": 40,
+        "context": "Markets swung sharply in early 2022 as Russia's invasion of Ukraine in late February spiked crude oil prices and global risk-off sentiment, layering fresh volatility on top of already-rising inflation fears.",
+    },
+    {
+        "id": "volatile_2024q4", "difficulty": "expert", "start": "2024-10-01", "end": "2024-12-31", "days": 40,
+        "context": "Markets swung wildly in the final quarter of 2024, with heavy FII selling triggering a sharp correction from record highs before volatility persisted into year-end amid mixed earnings and global cues.",
+    },
 ]
 
 
@@ -1472,8 +1496,8 @@ def reveal_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = De
     )
     outperformance_pct = user_return_pct - market_return_pct
 
-    market_scenario = next((s for s in MARKET_SCENARIOS if s["id"] == session.difficulty), None)
-    historical_context = market_scenario["context"] if market_scenario else ""
+    challenge_scenario = next((s for s in CHALLENGE_SCENARIOS if s["id"] == session.scenario_id), None)
+    historical_context = challenge_scenario["context"] if challenge_scenario else ""
 
     if first_day.year == final_day.year:
         actual_period = (
@@ -1505,9 +1529,10 @@ def reveal_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = De
         if nifty_down_by_day[day_idx]:
             panic_sells += 1
 
-    best_decision = "No trades were made during this challenge."
-    worst_decision = best_decision
-    if trade_log:
+    if total_trades == 0:
+        best_decision = "No trades made — you watched the market without acting"
+        worst_decision = "Consider making at least a few trades next time to practice decision-making"
+    else:
         scored = []
         for t in trade_log:
             final_price = final_prices.get(t["ticker"])
@@ -1518,7 +1543,11 @@ def reveal_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = De
             score = pct_to_end if t["action"] == "buy" else -pct_to_end
             scored.append((score, t, pct_to_end))
 
-        if scored:
+        if not scored:
+            # Trades exist but none had usable price data to score against.
+            best_decision = "Not enough price data to evaluate your trades."
+            worst_decision = best_decision
+        else:
             scored.sort(key=lambda x: x[0])
 
             def describe(entry):
@@ -1526,14 +1555,20 @@ def reveal_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = De
                 verb = "Buying" if trade["action"] == "buy" else "Selling"
                 direction = "rose" if pct >= 0 else "fell"
                 outcome = "paid off" if score >= 0 else "cost you"
+                company_name = COMPANY_NAMES.get(trade["ticker"], trade["ticker"])
                 return (
-                    f"{verb} {trade['quantity']} shares of {trade['ticker']} on day "
+                    f"{verb} {trade['quantity']} shares of {company_name} on day "
                     f"{trade['day_number']} {outcome} -- the stock {direction} "
                     f"{abs(pct):.1f}% by the end of the challenge."
                 )
 
-            worst_decision = describe(scored[0])
             best_decision = describe(scored[-1])
+            if len(scored) == 1:
+                # Best and worst would be the exact same trade -- don't show
+                # it twice as if they were two different decisions.
+                worst_decision = "With only one trade it's hard to identify a worst decision — try more trades next time"
+            else:
+                worst_decision = describe(scored[0])
 
     if outperformance_pct > 10:
         verdict = f"Outstanding! You beat the market by {outperformance_pct:.1f}% during {actual_period}."
@@ -1561,4 +1596,22 @@ def reveal_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = De
         },
         "verdict": verdict,
     }
-    return config
+
+
+@app.post("/users/{user_id}/challenge/{session_id}/abandon")
+def abandon_challenge(user_id: uuid.UUID, session_id: uuid.UUID, db: Session = Depends(get_db)):
+    session = (
+        db.query(models.ChallengeSession)
+        .filter(models.ChallengeSession.id == session_id, models.ChallengeSession.user_id == user_id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Challenge session not found")
+
+    # Marked complete+revealed (not deleted) so it drops out of GET /active
+    # but the record -- and its trade history -- is preserved.
+    session.is_complete = True
+    session.revealed = True
+    db.commit()
+
+    return {"message": "Challenge abandoned"}
