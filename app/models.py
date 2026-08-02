@@ -21,6 +21,9 @@ class User(Base):
     current_savings = Column(Numeric(14, 2))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    dependents = Column(Integer)
+    employment_type = Column(Text)
+    existing_investments = Column(Boolean)
 
     risk_profiles = relationship("RiskProfile", back_populates="user")
 
@@ -131,6 +134,25 @@ class ScenarioPortfolio(Base):
     starting_balance = Column(Numeric(14, 2), nullable=False, server_default="100000")
     virtual_cash = Column(Numeric(14, 2), nullable=False, server_default="100000")
     is_started = Column(Boolean, nullable=False, server_default="false")
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ChallengeSession(Base):
+    __tablename__ = "challenge_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    scenario_id = Column(Text, nullable=False)
+    difficulty = Column(Text, nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    current_day_index = Column(Integer, nullable=False, default=0)
+    virtual_cash = Column(Numeric(14, 2), nullable=False, server_default="100000")
+    starting_balance = Column(Numeric(14, 2), nullable=False, server_default="100000")
+    holdings = Column(JSONB, nullable=False, default=dict)
+    trade_log = Column(JSONB, nullable=False, default=list)
+    is_complete = Column(Boolean, nullable=False, server_default="false")
+    revealed = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

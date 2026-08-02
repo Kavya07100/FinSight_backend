@@ -8,6 +8,9 @@ class UserCreate(BaseModel):
     age: int = Field(gt=0)
     monthly_income: float = Field(ge=0)
     current_savings: float = Field(ge=0)
+    dependents: int | None = None
+    employment_type: str | None = None
+    existing_investments: bool | None = None
 
 
 class UserOut(BaseModel):
@@ -31,16 +34,17 @@ class UserUpdate(BaseModel):
 
 class RiskProfileRequest(BaseModel):
     """
-    Onboarding-facing shape. time_horizon_years and pct_income_investable
-    aren't collected by onboarding yet, so compute_and_store_risk_profile()
-    fills them with DEFAULT_TIME_HORIZON_YEARS / DEFAULT_PCT_INCOME_INVESTABLE
-    (see main.py) before calling the Portfolio Service.
+    Onboarding-facing shape. time_horizon_years and pct_income_investable are
+    now collected directly by onboarding's Step 2/3 (financial situation +
+    investment goals), so they're required here rather than defaulted.
     """
     age: int = Field(gt=0)
     monthly_income: float = Field(ge=0)
     current_savings: float = Field(ge=0)
     investment_goal: str
     risk_tolerance: int = Field(ge=1, le=5, description="1=very conservative, 5=very aggressive")
+    time_horizon_years: float = Field(gt=0)
+    pct_income_investable: float = Field(ge=0, le=100)
 
 
 class RiskProfileOut(BaseModel):
@@ -186,6 +190,20 @@ class ScenarioPortfolioOut(BaseModel):
     total_invested: float
     holdings: list[HoldingOut]
     overall_return_pct: float
+
+
+# ============================================================
+# Challenge Mode (day-by-day blind historical simulation)
+# ============================================================
+class ChallengeStartRequest(BaseModel):
+    difficulty: str = Field(pattern="^(easy|medium|hard|expert)$")
+    starting_balance: float = Field(ge=10000, le=10000000)
+
+
+class ChallengeTradeRequest(BaseModel):
+    ticker: str
+    action: str = Field(pattern="^(buy|sell)$")
+    quantity: int = Field(gt=0)
 
 
 class SetScenarioBalanceRequest(BaseModel):
