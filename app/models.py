@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import (
-    Column, String, Text, Numeric, Integer, BigInteger, Date,
+    Column, String, Text, Numeric, Integer, BigInteger, Date, Boolean,
     TIMESTAMP, ForeignKey, UniqueConstraint, CheckConstraint, func
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
@@ -91,7 +91,9 @@ class SimulationLog(Base):
 
 class PortfolioHolding(Base):
     __tablename__ = "portfolio_holdings"
-    __table_args__ = (UniqueConstraint("user_id", "ticker"),)
+    # Widened from UNIQUE(user_id, ticker) so the same ticker can be held
+    # independently across different scenario portfolios.
+    __table_args__ = (UniqueConstraint("user_id", "ticker", "scenario_id"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -99,6 +101,7 @@ class PortfolioHolding(Base):
     company_name = Column(Text)
     quantity = Column(Integer, nullable=False)
     avg_buy_price = Column(Numeric(14, 4), nullable=False)
+    scenario_id = Column(Text, nullable=False, server_default="live")
 
 
 class Transaction(Base):
@@ -114,6 +117,20 @@ class Transaction(Base):
     price = Column(Numeric(14, 4), nullable=False)
     total_value = Column(Numeric(14, 2), nullable=False)
     trade_date = Column(Date, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    scenario_id = Column(Text, nullable=False, server_default="live")
+
+
+class ScenarioPortfolio(Base):
+    __tablename__ = "scenario_portfolios"
+    __table_args__ = (UniqueConstraint("user_id", "scenario_id"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    scenario_id = Column(Text, nullable=False)
+    starting_balance = Column(Numeric(14, 2), nullable=False, server_default="100000")
+    virtual_cash = Column(Numeric(14, 2), nullable=False, server_default="100000")
+    is_started = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

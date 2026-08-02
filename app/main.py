@@ -163,6 +163,61 @@ def get_market_scenarios():
     return MARKET_SCENARIOS
 
 
+# Mirrors each scenario's start_date/end_date from MARKET_SCENARIOS, keyed
+# for quick lookup by scenario portfolio endpoints (pricing holdings as of
+# the scenario's end date rather than today for historical scenarios).
+SCENARIO_DATE_RANGES = {
+    "easy": {"start": "2023-01-01", "end": "2023-12-31"},
+    "medium": {"start": "2024-01-01", "end": "2024-12-31"},
+    "hard": {"start": "2022-01-01", "end": "2022-06-30"},
+    "expert": {"start": "2022-07-01", "end": "2022-12-31"},
+    "live": None,
+}
+
+
+@app.get("/market/historical-prices")
+def get_historical_prices(start_date: date, end_date: date, db: Session = Depends(get_db)):
+    """
+    Same shape as GET /market/prices, but for a historical scenario window:
+    "price" is the close on/just after start_date (what you'd have paid
+    entering the position), and "change_pct" is the *period* return through
+    to the close on/just before end_date -- not a single day's move.
+    """
+    if start_date.year == end_date.year:
+        period_label = f"{start_date:%b}-{end_date:%b %Y}"
+    else:
+        period_label = f"{start_date:%b %Y}-{end_date:%b %Y}"
+
+    result = {}
+    for ticker in MARKET_WATCH_TICKERS:
+        start_row = (
+            db.query(models.PriceHistory)
+            .filter(models.PriceHistory.ticker == ticker, models.PriceHistory.date >= start_date)
+            .order_by(models.PriceHistory.date.asc())
+            .first()
+        )
+        end_row = (
+            db.query(models.PriceHistory)
+            .filter(models.PriceHistory.ticker == ticker, models.PriceHistory.date <= end_date)
+            .order_by(models.PriceHistory.date.desc())
+            .first()
+        )
+        if not start_row or not end_row:
+            continue
+
+        start_price = float(start_row.close)
+        end_price = float(end_row.close)
+        period_return_pct = (end_price - start_price) / start_price * 100 if start_price else 0.0
+
+        result[ticker] = {
+            "name": COMPANY_NAMES[ticker],
+            "price": round(start_price, 2),
+            "change_pct": round(period_return_pct, 2),
+            "period": period_label,
+        }
+    return result
+
+
 def _get_latest_price(db: Session, ticker: str, as_of: date | None = None) -> float | None:
     """
     Without as_of: latest known close for the ticker.
@@ -185,6 +240,7 @@ def _record_transaction_and_update_holding(
     action: str,
     quantity: int,
     trade_date,
+    scenario_id: str = "live",
 ) -> None:
     """
     Called once per trade after a sandbox simulation succeeds. Records a
@@ -192,6 +248,11 @@ def _record_transaction_and_update_holding(
     on trade_date (nearest available trading day at/before it) -- not
     today's price. Using today's price for both the buy price AND the
     current price would make every position's P&L trivially 0%.
+
+    scenario_id isolates holdings/transactions per scenario -- the same
+    ticker can be held independently in "live" and in each historical
+    scenario without them affecting each other (see portfolio_holdings'
+    UNIQUE(user_id, ticker, scenario_id)).
     """
     price = _get_latest_price(db, ticker, as_of=trade_date)
     if price is None:
@@ -208,6 +269,7 @@ def _record_transaction_and_update_holding(
         price=price,
         total_value=price * quantity,
         trade_date=trade_date,
+        scenario_id=scenario_id,
     ))
 
     holding = (
@@ -215,6 +277,7 @@ def _record_transaction_and_update_holding(
         .filter(
             models.PortfolioHolding.user_id == user_id,
             models.PortfolioHolding.ticker == ticker,
+            models.PortfolioHolding.scenario_id == scenario_id,
         )
         .first()
     )
@@ -233,6 +296,7 @@ def _record_transaction_and_update_holding(
                 company_name=company_name,
                 quantity=quantity,
                 avg_buy_price=price,
+                scenario_id=scenario_id,
             ))
     elif action == "sell" and holding:
         remaining = holding.quantity - quantity
@@ -244,6 +308,83 @@ def _record_transaction_and_update_holding(
     # still recorded above, but there's no position to reduce.
 
     db.commit()
+
+
+def _get_or_create_scenario_portfolio(
+    db: Session, user_id: uuid.UUID, scenario_id: str
+) -> models.ScenarioPortfolio:
+    portfolio = (
+        db.query(models.ScenarioPortfolio)
+        .filter(
+            models.ScenarioPortfolio.user_id == user_id,
+            models.ScenarioPortfolio.scenario_id == scenario_id,
+        )
+        .first()
+    )
+    if not portfolio:
+        portfolio = models.ScenarioPortfolio(
+            user_id=user_id,
+            scenario_id=scenario_id,
+            starting_balance=100000,
+            virtual_cash=100000,
+            is_started=False,
+        )
+        db.add(portfolio)
+        db.commit()
+        db.refresh(portfolio)
+    return portfolio
+
+
+def _build_scenario_holdings(
+    db: Session, user_id: uuid.UUID, scenario_id: str
+) -> tuple[list[schemas.HoldingOut], float, float]:
+    """
+    Same P&L math as GET /users/{user_id}/portfolio, but scoped to one
+    scenario's holdings and priced as of that scenario's end date for
+    historical scenarios (there's no "today's price" for a 2022 backtest --
+    the last trading day it ran through is the right mark).
+    """
+    date_range = SCENARIO_DATE_RANGES.get(scenario_id)
+    as_of = date.fromisoformat(date_range["end"]) if date_range else None
+
+    holdings = (
+        db.query(models.PortfolioHolding)
+        .filter(
+            models.PortfolioHolding.user_id == user_id,
+            models.PortfolioHolding.scenario_id == scenario_id,
+        )
+        .all()
+    )
+
+    holdings_out = []
+    total_value = 0.0
+    total_invested = 0.0
+
+    for h in holdings:
+        avg_buy_price = float(h.avg_buy_price)
+        current_price = _get_latest_price(db, h.ticker, as_of=as_of) or avg_buy_price
+        current_value = h.quantity * current_price
+        invested = h.quantity * avg_buy_price
+        pnl_pct = ((current_price - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price else 0.0
+
+        holdings_out.append(schemas.HoldingOut(
+            id=h.id,
+            ticker=h.ticker,
+            company_name=h.company_name,
+            quantity=h.quantity,
+            avg_buy_price=avg_buy_price,
+            current_price=current_price,
+            current_value=current_value,
+            pnl_pct=pnl_pct,
+        ))
+
+        total_value += current_value
+        total_invested += invested
+
+    overall_return_pct = (
+        ((total_value - total_invested) / total_invested) * 100 if total_invested else 0.0
+    )
+    return holdings_out, total_invested, overall_return_pct
 
 
 # ============================================================
@@ -534,8 +675,21 @@ def run_sandbox_simulation(
 
     for t in payload.trades:
         _record_transaction_and_update_holding(
-            db, user_id, t.ticker, t.action, t.quantity, t.trade_date
+            db, user_id, t.ticker, t.action, t.quantity, t.trade_date,
+            scenario_id=payload.scenario_id,
         )
+
+    # Deduct this run's net cash outflow from the scenario's virtual_cash --
+    # executed_trades' "cost" is always a positive price*quantity magnitude,
+    # so buys subtract and sells add back.
+    scenario_portfolio = _get_or_create_scenario_portfolio(db, user_id, payload.scenario_id)
+    net_cash_spent = sum(
+        t["cost"] if t["action"] == "buy" else -t["cost"]
+        for t in result["executed_trades"]
+    )
+    scenario_portfolio.virtual_cash = float(scenario_portfolio.virtual_cash) - net_cash_spent
+    scenario_portfolio.is_started = True
+    db.commit()
 
     return log
 
@@ -593,9 +747,15 @@ def analyze_simulation_behavior(
 # ============================================================
 @app.get("/users/{user_id}/portfolio", response_model=schemas.PortfolioOut)
 def get_portfolio(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    # This endpoint predates scenario portfolios and represents the "live"
+    # scenario specifically -- scoped so historical-scenario practice trades
+    # never bleed into the main dashboard/portfolio views.
     holdings = (
         db.query(models.PortfolioHolding)
-        .filter(models.PortfolioHolding.user_id == user_id)
+        .filter(
+            models.PortfolioHolding.user_id == user_id,
+            models.PortfolioHolding.scenario_id == "live",
+        )
         .all()
     )
 
@@ -656,7 +816,10 @@ def get_portfolio(user_id: uuid.UUID, db: Session = Depends(get_db)):
 def get_transactions(user_id: uuid.UUID, db: Session = Depends(get_db)):
     return (
         db.query(models.Transaction)
-        .filter(models.Transaction.user_id == user_id)
+        .filter(
+            models.Transaction.user_id == user_id,
+            models.Transaction.scenario_id == "live",
+        )
         .order_by(models.Transaction.created_at.desc())
         .limit(10)
         .all()
@@ -669,12 +832,127 @@ def reset_portfolio(user_id: uuid.UUID, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    db.query(models.PortfolioHolding).filter(models.PortfolioHolding.user_id == user_id).delete()
-    db.query(models.Transaction).filter(models.Transaction.user_id == user_id).delete()
+    db.query(models.PortfolioHolding).filter(
+        models.PortfolioHolding.user_id == user_id,
+        models.PortfolioHolding.scenario_id == "live",
+    ).delete()
+    db.query(models.Transaction).filter(
+        models.Transaction.user_id == user_id,
+        models.Transaction.scenario_id == "live",
+    ).delete()
     db.query(models.SimulationLog).filter(models.SimulationLog.user_id == user_id).delete()
+
+    live_portfolio = (
+        db.query(models.ScenarioPortfolio)
+        .filter(
+            models.ScenarioPortfolio.user_id == user_id,
+            models.ScenarioPortfolio.scenario_id == "live",
+        )
+        .first()
+    )
+    if live_portfolio:
+        live_portfolio.virtual_cash = live_portfolio.starting_balance
+        live_portfolio.is_started = False
+
     db.commit()
 
     return {"message": "Portfolio reset successfully"}
+
+
+# ============================================================
+# Scenario Portfolios (per-scenario cash + holdings isolation)
+# ============================================================
+@app.get(
+    "/users/{user_id}/scenario/{scenario_id}/portfolio",
+    response_model=schemas.ScenarioPortfolioOut,
+)
+def get_scenario_portfolio(user_id: uuid.UUID, scenario_id: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    portfolio = _get_or_create_scenario_portfolio(db, user_id, scenario_id)
+    holdings_out, total_invested, overall_return_pct = _build_scenario_holdings(
+        db, user_id, scenario_id
+    )
+
+    return schemas.ScenarioPortfolioOut(
+        scenario_id=scenario_id,
+        virtual_cash=float(portfolio.virtual_cash),
+        starting_balance=float(portfolio.starting_balance),
+        is_started=portfolio.is_started,
+        total_invested=total_invested,
+        holdings=holdings_out,
+        overall_return_pct=overall_return_pct,
+    )
+
+
+@app.post(
+    "/users/{user_id}/scenario/{scenario_id}/set-balance",
+    response_model=schemas.ScenarioPortfolioOut,
+)
+def set_scenario_balance(
+    user_id: uuid.UUID,
+    scenario_id: str,
+    payload: schemas.SetScenarioBalanceRequest,
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    portfolio = _get_or_create_scenario_portfolio(db, user_id, scenario_id)
+    if portfolio.is_started:
+        raise HTTPException(
+            status_code=400, detail="Cannot change balance after trading has begun"
+        )
+
+    portfolio.starting_balance = payload.starting_balance
+    portfolio.virtual_cash = payload.starting_balance
+    db.commit()
+    db.refresh(portfolio)
+
+    holdings_out, total_invested, overall_return_pct = _build_scenario_holdings(
+        db, user_id, scenario_id
+    )
+    return schemas.ScenarioPortfolioOut(
+        scenario_id=scenario_id,
+        virtual_cash=float(portfolio.virtual_cash),
+        starting_balance=float(portfolio.starting_balance),
+        is_started=portfolio.is_started,
+        total_invested=total_invested,
+        holdings=holdings_out,
+        overall_return_pct=overall_return_pct,
+    )
+
+
+@app.post(
+    "/users/{user_id}/scenario/{scenario_id}/reset",
+    response_model=schemas.ScenarioResetOut,
+)
+def reset_scenario_portfolio(user_id: uuid.UUID, scenario_id: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    portfolio = _get_or_create_scenario_portfolio(db, user_id, scenario_id)
+
+    db.query(models.PortfolioHolding).filter(
+        models.PortfolioHolding.user_id == user_id,
+        models.PortfolioHolding.scenario_id == scenario_id,
+    ).delete()
+    db.query(models.Transaction).filter(
+        models.Transaction.user_id == user_id,
+        models.Transaction.scenario_id == scenario_id,
+    ).delete()
+
+    portfolio.virtual_cash = portfolio.starting_balance
+    portfolio.is_started = False
+    db.commit()
+
+    return schemas.ScenarioResetOut(
+        message="Scenario reset", virtual_cash=float(portfolio.virtual_cash)
+    )
 
 
 @app.get("/users/{user_id}/simulations/latest", response_model=schemas.SimulationResultOut)

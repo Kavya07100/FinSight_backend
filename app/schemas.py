@@ -84,6 +84,10 @@ class SandboxSimulationRequest(BaseModel):
         default="SPY",
         description="Index/ETF to compare against via buy-and-hold. Defaults to SPY (S&P 500).",
     )
+    scenario_id: str = Field(
+        default="live",
+        description="Which scenario portfolio this trade's cash/holdings apply to.",
+    )
 
 
 class SimulationResultOut(BaseModel):
@@ -169,6 +173,28 @@ class PortfolioOut(BaseModel):
     total_invested: float
     overall_return_pct: float
     today_pnl: float
+
+
+# ============================================================
+# Scenario Portfolios (per-scenario cash + holdings isolation)
+# ============================================================
+class ScenarioPortfolioOut(BaseModel):
+    scenario_id: str
+    virtual_cash: float
+    starting_balance: float
+    is_started: bool
+    total_invested: float
+    holdings: list[HoldingOut]
+    overall_return_pct: float
+
+
+class SetScenarioBalanceRequest(BaseModel):
+    starting_balance: float = Field(ge=10000, le=10000000)
+
+
+class ScenarioResetOut(BaseModel):
+    message: str
+    virtual_cash: float
 
 
 # ============================================================
