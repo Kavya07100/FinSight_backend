@@ -22,14 +22,19 @@ app = FastAPI(title="FinSight API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://fin-sight-frontend-three.vercel.app",  # production
+    ],
     # TEMPORARY: Starlette's CORSMiddleware matches allow_origins by exact
-    # string equality (no glob support) -- "https://*.vercel.app" there
-    # would never match a real origin and silently block everything. This
-    # regex is the actual mechanism for pattern-matching origins. Since
-    # vercel.app is a shared multi-tenant domain, this allows ANY project
-    # hosted there (not just ours) to make credentialed requests -- replace
-    # with the exact frontend origin once it's known.
+    # string equality (no glob support) -- a literal "https://*.vercel.app"
+    # entry there would never match a real origin. This regex is the actual
+    # mechanism for pattern-matching origins, covering Vercel preview-deploy
+    # URLs (which get a random subdomain per branch/PR). Since vercel.app is
+    # a shared multi-tenant domain, this still allows ANY project hosted
+    # there (not just ours) to make credentialed requests -- drop it once
+    # preview deploys are no longer needed, and rely on the exact production
+    # origin above.
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
