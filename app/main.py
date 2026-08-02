@@ -1076,11 +1076,20 @@ def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db
         .order_by(models.SimulationLog.started_at.desc())
         .first()
     )
-    behavior_score = (
-        latest_log.metrics.get("behavior") if latest_log and latest_log.metrics else None
+    behavior_data = (
+        latest_log.metrics.get("behavior", {}) if latest_log and latest_log.metrics else {}
     )
+    # Key is overall_behavior_score, not behavior_score -- see
+    # behavior_engine.py's compute_behavior_metrics return shape.
+    behavior_score = behavior_data.get("overall_behavior_score")
+    behavior_flags = behavior_data.get("flags", [])
 
-    path = generate_strategy(risk_profile_dict, behavior_score=behavior_score)
+    path = generate_strategy(
+        risk_profile_dict,
+        behavior_score=behavior_score,
+        behavior_flags=behavior_flags,
+        score_breakdown=profile.score_breakdown or {},
+    )
 
     latest_version = db.query(func.max(models.StrategyConfig.version)).filter(
         models.StrategyConfig.user_id == user_id

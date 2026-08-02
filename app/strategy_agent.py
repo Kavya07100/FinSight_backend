@@ -64,9 +64,103 @@ def retrieve_available_modules(category: str, top_k: int = 12) -> list[dict]:
 # ------------------------------------------------------------------
 # Step 2: Build the prompt and call Groq
 # ------------------------------------------------------------------
+def _build_strategy_prompt(
+    risk_profile: dict,
+    category: str,
+    module_list: str,
+    behavior_score: float | None,
+    behavior_flags: list | None,
+    score_breakdown: dict | None,
+) -> str:
+    behavior_flags = behavior_flags or []
+    score_breakdown = score_breakdown or {}
+    # Weights vary if the scoring model is retuned (see portfolio_service.py's
+    # WEIGHT_* constants) -- read them from the breakdown itself rather than
+    # hardcoding max-points labels that would silently go stale.
+    weights = score_breakdown.get("weights", {})
+
+    score_breakdown_section = ""
+    if score_breakdown:
+        score_breakdown_section = f"""
+Component score breakdown (out of max points):
+- Time horizon score: {score_breakdown.get('time_horizon', 'N/A')} / {weights.get('time_horizon', 'N/A')}
+- Risk tolerance score: {score_breakdown.get('risk_tolerance', 'N/A')} / {weights.get('risk_tolerance', 'N/A')}
+- Savings cushion score: {score_breakdown.get('savings_cushion', 'N/A')} / {weights.get('savings_cushion', 'N/A')}
+- Investable income score: {score_breakdown.get('pct_investable', 'N/A')} / {weights.get('pct_investable', 'N/A')}
+
+Specific personalization flags from scores:
+{f"- LOW SAVINGS CUSHION: Add 'Emergency Fund Building' as module 1" if score_breakdown.get('savings_cushion', 10) < 5 else ""}
+{f"- SHORT TIME HORIZON: Prioritize liquid investments and capital preservation" if score_breakdown.get('time_horizon', 20) < 15 else ""}
+{f"- LOW INVESTABLE INCOME: Add 'Budgeting and SIP Basics' early in path" if score_breakdown.get('pct_investable', 5) < 3 else ""}
+"""
+
+    behavior_context = ""
+    if behavior_score is not None or behavior_flags:
+        behavior_context = f"""
+The user has previously completed simulations. Their overall behavior score
+was {behavior_score if behavior_score is not None else 'N/A'}/100.
+
+Use this to adjust the path -- for example, if they panic-sold on drawdowns,
+include risk management content earlier. If they over-traded, include content
+on patience and long-term thinking.
+"""
+
+    behavior_flags_section = ""
+    if behavior_flags:
+        behavior_flags_section = f"""
+Behavioral flags detected from trading history:
+{chr(10).join(f"- {flag.upper()}: address this in learning path" for flag in behavior_flags)}
+
+Specific module requirements based on behavioral flags:
+{f"- PANIC_SELLING detected: Include 'Managing Market Volatility' and 'Emotional Investing Pitfalls' modules" if 'panic_selling' in behavior_flags else ""}
+{f"- DISPOSITION_BIAS detected: Include 'When to Sell: Cutting Losses Early' module" if 'disposition_bias' in behavior_flags else ""}
+{f"- HIGH_CONCENTRATION detected: Include 'Portfolio Diversification' as priority module" if 'high_concentration' in behavior_flags else ""}
+{f"- OVER_TRADING detected: Include 'Cost of Trading' and 'Long-Term Investing Benefits' modules" if 'over_trading' in behavior_flags else ""}
+"""
+
+    return f"""You are a financial literacy curriculum designer for a retail investing education platform.
+Your job is to create a personalized learning path for a user based on their risk profile.
+
+USER RISK PROFILE:
+- Risk score: {risk_profile.get('risk_score')} / 100
+- Category: {category}
+- Investment goal: {risk_profile.get('goal')}
+- Time horizon: {risk_profile.get('time_horizon_years')} years
+- % of income they can invest: {risk_profile.get('pct_income_investable')}%
+- Self-reported risk tolerance (1=very conservative, 5=very aggressive): {risk_profile.get('risk_tolerance_input')}
+{score_breakdown_section}{behavior_context}{behavior_flags_section}
+AVAILABLE MODULES (you MUST only use titles from this list exactly as written):
+{module_list}
+
+INSTRUCTIONS:
+1. Select 4 to 6 modules from the list above appropriate for this user's risk profile.
+2. Order them from foundational to advanced.
+3. For each module decide type: "fixed" (guided lesson) or "sandbox" (user runs their own backtest).
+4. Assign difficulty: "easy", "medium", or "hard".
+5. For "fixed" modules assign xp (10-100). For "sandbox" modules set xp to null.
+6. For "sandbox" modules set asset_class to "equity", "etf", or "bond". For "fixed" set asset_class to null.
+7. Write a short rationale (1-2 sentences) for each module.
+8. If any personalization or behavioral flags above call for a specific module, prioritize including it.
+
+Respond with ONLY a JSON array, no explanation, no markdown, no backticks. Example format:
+[
+  {{
+    "step": 1,
+    "module": "exact title from list",
+    "type": "fixed",
+    "difficulty": "easy",
+    "xp": 50,
+    "asset_class": null,
+    "rationale": "reason here"
+  }}
+]"""
+
+
 def generate_strategy(
     risk_profile: dict,
-    behavior_score: dict | None = None,
+    behavior_score: float | None = None,
+    behavior_flags: list | None = None,
+    score_breakdown: dict | None = None,
 ) -> list[dict]:
     """
     Core Strategy Agent call using Groq/Llama.
@@ -93,52 +187,9 @@ def generate_strategy(
         for m in available_modules
     )
 
-    behavior_context = ""
-    if behavior_score:
-        behavior_context = f"""
-The user has previously completed simulations. Here is their behavior analysis:
-{behavior_score}
-
-Use this to adjust the path -- for example, if they panic-sold on drawdowns,
-include risk management content earlier. If they over-traded, include content
-on patience and long-term thinking.
-"""
-
-    prompt = f"""You are a financial literacy curriculum designer for a retail investing education platform.
-Your job is to create a personalized learning path for a user based on their risk profile.
-
-USER RISK PROFILE:
-- Risk score: {risk_profile.get('risk_score')} / 100
-- Category: {category}
-- Investment goal: {risk_profile.get('goal')}
-- Time horizon: {risk_profile.get('time_horizon_years')} years
-- % of income they can invest: {risk_profile.get('pct_income_investable')}%
-- Self-reported risk tolerance (1=very conservative, 5=very aggressive): {risk_profile.get('risk_tolerance_input')}
-{behavior_context}
-AVAILABLE MODULES (you MUST only use titles from this list exactly as written):
-{module_list}
-
-INSTRUCTIONS:
-1. Select 4 to 6 modules from the list above appropriate for this user's risk profile.
-2. Order them from foundational to advanced.
-3. For each module decide type: "fixed" (guided lesson) or "sandbox" (user runs their own backtest).
-4. Assign difficulty: "easy", "medium", or "hard".
-5. For "fixed" modules assign xp (10-100). For "sandbox" modules set xp to null.
-6. For "sandbox" modules set asset_class to "equity", "etf", or "bond". For "fixed" set asset_class to null.
-7. Write a short rationale (1-2 sentences) for each module.
-
-Respond with ONLY a JSON array, no explanation, no markdown, no backticks. Example format:
-[
-  {{
-    "step": 1,
-    "module": "exact title from list",
-    "type": "fixed",
-    "difficulty": "easy",
-    "xp": 50,
-    "asset_class": null,
-    "rationale": "reason here"
-  }}
-]"""
+    prompt = _build_strategy_prompt(
+        risk_profile, category, module_list, behavior_score, behavior_flags, score_breakdown
+    )
 
     response = client.chat.completions.create(
         model=GENERATION_MODEL,
