@@ -107,6 +107,62 @@ def get_market_prices():
     return merged
 
 
+# Static scenario definitions -- each maps to a real historical Indian market
+# period with price_history data already ingested for it, so the sandbox
+# simulator can run against it unmodified (it just needs a start_date/end_date).
+MARKET_SCENARIOS = [
+    {
+        "id": "easy",
+        "name": "Bull Market Rally",
+        "difficulty": "Easy",
+        "description": "Practice in a rising market — the 2023 Indian market recovery",
+        "context": "Post-COVID recovery drove strong FII inflows into Indian markets. Sensex rose from 60,000 to 72,000 (+20%). Most stocks trended upward consistently.",
+        "start_date": "2023-01-01",
+        "end_date": "2023-12-31",
+        "hint": "Markets generally rising — test basic buy-and-hold strategies",
+        "color": "green",
+    },
+    {
+        "id": "medium",
+        "name": "Mixed Market",
+        "difficulty": "Medium",
+        "description": "Realistic conditions — the 2024 Indian market",
+        "context": "India's market showed selective growth in 2024. Large caps outperformed mid-caps. Sector rotation created both opportunities and traps.",
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "hint": "Mixed conditions — stock selection matters more than market timing",
+        "color": "yellow",
+    },
+    {
+        "id": "hard",
+        "name": "Market Correction",
+        "difficulty": "Hard",
+        "description": "Navigate a downturn — the early 2022 correction",
+        "context": "Global inflation hit 40-year highs. The US Federal Reserve began aggressive rate hikes. FIIs pulled billions from emerging markets including India. Sensex fell 15% in 6 months.",
+        "start_date": "2022-01-01",
+        "end_date": "2022-06-30",
+        "hint": "Markets falling — can you avoid panic selling and find opportunities?",
+        "color": "red",
+    },
+    {
+        "id": "expert",
+        "name": "High Volatility",
+        "difficulty": "Expert",
+        "description": "Rapid swings — the volatile second half of 2022",
+        "context": "After the correction, markets oscillated wildly. Some sectors recovered sharply while others continued falling. Timing and discipline were critical.",
+        "start_date": "2022-07-01",
+        "end_date": "2022-12-31",
+        "hint": "Unpredictable swings — test sophisticated strategies and emotional discipline",
+        "color": "purple",
+    },
+]
+
+
+@app.get("/market/scenarios")
+def get_market_scenarios():
+    return MARKET_SCENARIOS
+
+
 def _get_latest_price(db: Session, ticker: str, as_of: date | None = None) -> float | None:
     """
     Without as_of: latest known close for the ticker.
