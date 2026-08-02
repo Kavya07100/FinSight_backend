@@ -1,4 +1,7 @@
+import re
+import time
 import uuid
+import yfinance as yf
 from datetime import date, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +45,50 @@ COMPANY_NAMES = {
     "SBIN.NS": "State Bank of India",
     "SPY": "S&P 500 ETF",
 }
+
+# Simple in-process cache -- Yahoo Finance rate-limits/blocks callers that
+# hit it on every page load, and Market Watch is read by every user viewing
+# the simulate page. A module-level dict is enough here since this is a
+# single-process dev/demo deployment (no shared cache across workers).
+MARKET_PRICES_CACHE_TTL_SECONDS = 300
+_market_prices_cache: dict = {"data": None, "fetched_at": 0.0}
+
+
+@app.get("/market/prices")
+def get_market_prices():
+    now = time.time()
+    cached = _market_prices_cache["data"]
+    if cached is not None and now - _market_prices_cache["fetched_at"] < MARKET_PRICES_CACHE_TTL_SECONDS:
+        return cached
+
+    prices = {}
+    for ticker, name in COMPANY_NAMES.items():
+        try:
+            fast_info = yf.Ticker(ticker).fast_info
+            last_price = fast_info["lastPrice"]
+            previous_close = fast_info["previousClose"]
+            change_pct = (
+                ((last_price - previous_close) / previous_close) * 100
+                if previous_close
+                else 0.0
+            )
+            prices[ticker] = {
+                "price": round(float(last_price), 2),
+                "change_pct": round(float(change_pct), 2),
+                "name": name,
+            }
+        except Exception:
+            # Skip tickers Yahoo fails on this cycle rather than failing the
+            # whole response -- stale cached data (if any) is better than none.
+            continue
+
+    if prices:
+        _market_prices_cache["data"] = prices
+        _market_prices_cache["fetched_at"] = now
+        return prices
+
+    # Nothing fetched this cycle -- serve stale cache rather than an empty response.
+    return cached or {}
 
 
 def _get_latest_price(db: Session, ticker: str, as_of: date | None = None) -> float | None:
@@ -658,4 +705,51 @@ def get_latest_strategy(user_id: uuid.UUID, db: Session = Depends(get_db)):
     )
     if not config:
         raise HTTPException(status_code=404, detail="No strategy generated yet")
+    return config
+
+
+# news_agent.py stores articles as a single `content` string ending in
+# "(Source: <name>. Read more: <url>)" -- see build_content() there. This
+# pulls those two pieces back out so the API can return structured fields
+# instead of making the frontend regex the text itself.
+NEWS_SOURCE_PATTERN = re.compile(
+    r"^(?P<content>.*)\s\(Source:\s(?P<source>.*?)\.\sRead more:\s(?P<url>.*?)\)$",
+    re.DOTALL,
+)
+
+
+@app.get("/news", response_model=list[schemas.NewsItemOut])
+def get_news(limit: int = 12, db: Session = Depends(get_db)):
+    articles = (
+        db.query(models.EmbeddedContent)
+        .filter(models.EmbeddedContent.source == "news")
+        .order_by(models.EmbeddedContent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    results = []
+    for article in articles:
+        match = NEWS_SOURCE_PATTERN.match(article.content)
+        if match:
+            content = match.group("content")
+            source = match.group("source")
+            url = match.group("url")
+        else:
+            content = article.content
+            source = "Unknown source"
+            url = ""
+
+        results.append(
+            schemas.NewsItemOut(
+                id=article.id,
+                title=article.title or "",
+                content=content,
+                source=source,
+                url=url,
+                tags=article.tags or [],
+                created_at=article.created_at,
+            )
+        )
+    return results
     return config

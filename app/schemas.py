@@ -115,29 +115,6 @@ class StrategyModuleOut(BaseModel):
     """One step in the learning path."""
     step: int
     module: str
-    type: str          # "fixed" or "sandbox"
-    difficulty: str    # "easy", "medium", "hard"
-    xp: int | None = None           # fixed modules only
-    asset_class: str | None = None  # sandbox modules only
-    rationale: str
-
-
-class StrategyConfigOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    user_id: uuid.UUID
-    version: int
-    risk_profile_id: uuid.UUID
-    path: list[dict]   # stored as JSONB; frontend gets raw list of module dicts
-    created_at: datetime
-
-    # ============================================================
-# Strategy Agent
-# ============================================================
-class StrategyModuleOut(BaseModel):
-    """One step in the learning path."""
-    step: int
-    module: str
     type: str
     difficulty: str
     xp: int | None = None
