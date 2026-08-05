@@ -583,6 +583,9 @@ def _create_risk_profile_version(
         time_horizon_years=payload.time_horizon_years,
         pct_income_investable=payload.pct_income_investable,
         risk_tolerance_input=payload.risk_tolerance,
+        # payload.age is already the user's age (set from user.age by both
+        # callers -- see compute_and_store_risk_profile and update_user).
+        age=payload.age,
     ))
 
     latest_version = db.query(func.max(models.RiskProfile.version)).filter(
@@ -1105,12 +1108,14 @@ def generate_and_store_strategy(user_id: uuid.UUID, db: Session = Depends(get_db
     # behavior_engine.py's compute_behavior_metrics return shape.
     behavior_score = behavior_data.get("overall_behavior_score")
     behavior_flags = behavior_data.get("flags", [])
+    existing_investments = user.existing_investments
 
     path = generate_strategy(
         risk_profile_dict,
         behavior_score=behavior_score,
         behavior_flags=behavior_flags,
         score_breakdown=profile.score_breakdown or {},
+        existing_investments=existing_investments,
     )
 
     latest_version = db.query(func.max(models.StrategyConfig.version)).filter(

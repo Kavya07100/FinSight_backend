@@ -34,6 +34,9 @@ class RiskProfileInput:
     time_horizon_years: float
     pct_income_investable: float   # 0-100
     risk_tolerance_input: int      # 1-5 self-reported
+    age: int | None = None         # used by _score_age_consistency below
+    dependents: int | None = None  # stored but not scored (like goal)
+    employment_type: str | None = None  # stored but not scored (like goal)
 
 
 @dataclass
@@ -103,6 +106,29 @@ def _score_pct_investable(pct: float) -> float:
     return fraction * WEIGHT_PCT_INVESTABLE
 
 
+def _score_age_consistency(age: int | None, time_horizon_years: float) -> float:
+    """
+    Check if stated time horizon is consistent with age.
+    Older investors should have shorter practical horizons
+    regardless of what they state.
+
+    If age > 55 and time_horizon > 10: reduce effective horizon
+    If age < 30: slight bonus (long runway ahead)
+    """
+    if age is None:
+        return 0.0  # no data, no adjustment
+
+    if age < 30:
+        return 2.5  # bonus for young investor, long runway
+    elif age < 45:
+        return 0.0  # neutral
+    elif age < 55:
+        return -1.0  # slight reduction
+    else:
+        return -3.0  # significant reduction — late stage investor
+        # even if they say 10+ years, physical age limits practical horizon
+
+
 def _categorize(score: int) -> str:
     for threshold, label in CATEGORY_THRESHOLDS:
         if score <= threshold:
@@ -115,8 +141,10 @@ def compute_risk_profile(data: RiskProfileInput) -> RiskProfileOutput:
     tolerance_component = _score_risk_tolerance(data.risk_tolerance_input)
     savings_component = _score_savings_cushion(data.savings, data.income)
     pct_component = _score_pct_investable(data.pct_income_investable)
+    age_adjustment = _score_age_consistency(data.age, data.time_horizon_years)
 
-    raw_score = time_component + tolerance_component + savings_component + pct_component
+    raw_score = time_component + tolerance_component + savings_component + pct_component + age_adjustment
+    raw_score = max(0, min(100, raw_score))  # clamp -- age_adjustment can push past the 0-100 band
     risk_score = round(raw_score)
     category = _categorize(risk_score)
 
@@ -125,6 +153,7 @@ def compute_risk_profile(data: RiskProfileInput) -> RiskProfileOutput:
         "risk_tolerance": round(tolerance_component, 2),
         "savings_cushion": round(savings_component, 2),
         "pct_investable": round(pct_component, 2),
+        "age_adjustment": round(age_adjustment, 2),
         "weights": {
             "time_horizon": WEIGHT_TIME_HORIZON,
             "risk_tolerance": WEIGHT_RISK_TOLERANCE,

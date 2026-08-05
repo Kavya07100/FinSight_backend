@@ -71,6 +71,7 @@ def _build_strategy_prompt(
     behavior_score: float | None,
     behavior_flags: list | None,
     score_breakdown: dict | None,
+    existing_investments: bool | None = None,
 ) -> str:
     behavior_flags = behavior_flags or []
     score_breakdown = score_breakdown or {}
@@ -129,6 +130,8 @@ USER RISK PROFILE:
 - % of income they can invest: {risk_profile.get('pct_income_investable')}%
 - Self-reported risk tolerance (1=very conservative, 5=very aggressive): {risk_profile.get('risk_tolerance_input')}
 {score_breakdown_section}{behavior_context}{behavior_flags_section}
+{f"User already has existing investments (FD, PPF, stocks, property). Their FinSight virtual portfolio can focus on growth since they have a conservative base elsewhere." if existing_investments else "User has no existing investments — include foundational safety-first modules."}
+
 AVAILABLE MODULES (you MUST only use titles from this list exactly as written):
 {module_list}
 
@@ -161,6 +164,7 @@ def generate_strategy(
     behavior_score: float | None = None,
     behavior_flags: list | None = None,
     score_breakdown: dict | None = None,
+    existing_investments: bool | None = None,
 ) -> list[dict]:
     """
     Core Strategy Agent call using Groq/Llama.
@@ -188,7 +192,8 @@ def generate_strategy(
     )
 
     prompt = _build_strategy_prompt(
-        risk_profile, category, module_list, behavior_score, behavior_flags, score_breakdown
+        risk_profile, category, module_list, behavior_score, behavior_flags, score_breakdown,
+        existing_investments,
     )
 
     response = client.chat.completions.create(
