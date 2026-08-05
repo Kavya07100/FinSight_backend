@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, date
+from typing import Literal
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
@@ -19,7 +20,10 @@ class UserOut(BaseModel):
     full_name: str | None
     age: int | None
     monthly_income: float | None
+    monthly_expenses: float | None = None
     current_savings: float | None
+    dependents: int | None = None
+    employment_type: str | None = None
     created_at: datetime
 
 
@@ -27,9 +31,13 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     age: int | None = Field(default=None, gt=0)
     monthly_income: float | None = Field(default=None, ge=0)
+    monthly_expenses: float | None = Field(default=None, ge=0)
     current_savings: float | None = Field(default=None, ge=0)
+    dependents: int | None = Field(default=None, ge=0)
+    employment_type: str | None = None
     investment_goal: str | None = None
     risk_tolerance: int | None = Field(default=None, ge=1, le=5)
+    time_horizon_years: float | None = Field(default=None, gt=0)
 
 
 class RiskProfileRequest(BaseModel):
@@ -84,9 +92,12 @@ class SandboxSimulationRequest(BaseModel):
     end_date: date
     starting_cash: float = Field(gt=0)
     trades: list[TradeIn]
-    benchmark_ticker: str = Field(
+    benchmark_ticker: Literal["SPY", "NIFTYBEES.NS"] = Field(
         default="SPY",
-        description="Index/ETF to compare against via buy-and-hold. Defaults to SPY (S&P 500).",
+        description=(
+            "Index/ETF to compare against via buy-and-hold. SPY = S&P 500 "
+            "(global benchmark), NIFTYBEES.NS = Nifty 50 (Indian benchmark)."
+        ),
     )
     scenario_id: str = Field(
         default="live",

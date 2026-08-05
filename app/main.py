@@ -492,8 +492,14 @@ def update_user(
         user.age = payload.age
     if payload.monthly_income is not None:
         user.monthly_income = payload.monthly_income
+    if payload.monthly_expenses is not None:
+        user.monthly_expenses = payload.monthly_expenses
     if payload.current_savings is not None:
         user.current_savings = payload.current_savings
+    if payload.dependents is not None:
+        user.dependents = payload.dependents
+    if payload.employment_type is not None:
+        user.employment_type = payload.employment_type
 
     db.add(user)
     db.commit()
@@ -515,11 +521,14 @@ def update_user(
             payload.risk_tolerance if payload.risk_tolerance is not None
             else (latest_profile.risk_tolerance_input if latest_profile else None)
         )
-        # PUT /users/{id} only ever changes investment_goal/risk_tolerance
-        # (see settings/page.tsx) -- time_horizon_years/pct_income_investable
-        # aren't collected here, so carry over whatever the last computed
-        # risk profile used.
-        resolved_time_horizon = latest_profile.time_horizon_years if latest_profile else None
+        # PUT /users/{id} can also change time_horizon_years (see
+        # settings/page.tsx); pct_income_investable still isn't collected
+        # here, so it's always carried over from the last computed risk
+        # profile.
+        resolved_time_horizon = (
+            payload.time_horizon_years if payload.time_horizon_years is not None
+            else (latest_profile.time_horizon_years if latest_profile else None)
+        )
         resolved_pct_investable = latest_profile.pct_income_investable if latest_profile else None
 
         if (
