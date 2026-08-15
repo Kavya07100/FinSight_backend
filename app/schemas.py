@@ -128,6 +128,50 @@ class LearningAskResponse(BaseModel):
     sources: list[str]
 
 # ============================================================
+# Learning Modules (article + quiz)
+# ============================================================
+class QuizQuestionOut(BaseModel):
+    """Quiz question as sent to the client -- correct_answer is withheld."""
+    id: uuid.UUID
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+
+
+class LearningModuleOut(BaseModel):
+    module_name: str
+    article_content: str
+    article_summary: list[str]
+    difficulty: str
+    quiz_questions: list[QuizQuestionOut]
+
+
+class QuizSubmitRequest(BaseModel):
+    module_name: str
+    module_step: int
+    answers: dict[str, str] = Field(description="question_id (str) -> chosen option (a/b/c/d)")
+
+
+class QuizResultItem(BaseModel):
+    question_id: str
+    question: str
+    your_answer: str | None
+    correct_answer: str
+    is_correct: bool
+    explanation: str
+
+
+class QuizSubmitResponse(BaseModel):
+    score: int
+    total: int
+    passed: bool
+    xp_awarded: int
+    results: list[QuizResultItem]
+
+
+# ============================================================
 # Strategy Agent
 # ============================================================
 class StrategyModuleOut(BaseModel):

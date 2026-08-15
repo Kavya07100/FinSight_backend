@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from . import models, schemas
 from .database import get_db
@@ -1054,6 +1054,139 @@ def get_latest_simulation(user_id: uuid.UUID, db: Session = Depends(get_db)):
 def ask_learning_agent(payload: schemas.LearningAskRequest):
     result = generate_answer(payload.question)
     return schemas.LearningAskResponse(answer=result["answer"], sources=result["sources"])
+
+
+# ============================================================
+# Learning Modules (article + quiz)
+# ============================================================
+@app.get("/learning/modules/{module_name}", response_model=schemas.LearningModuleOut)
+def get_learning_module(module_name: str, db: Session = Depends(get_db)):
+    module = db.execute(
+        text("""
+            SELECT module_name, article_content, article_summary, difficulty
+            FROM learning_modules
+            WHERE module_name = :module_name
+        """),
+        {"module_name": module_name},
+    ).mappings().first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Learning module not found")
+
+    # correct_answer and explanations are withheld here -- returned only
+    # after submission via POST /users/{user_id}/quiz/submit.
+    questions = db.execute(
+        text("""
+            SELECT id, question, option_a, option_b, option_c, option_d
+            FROM quiz_questions
+            WHERE module_name = :module_name
+            ORDER BY created_at
+        """),
+        {"module_name": module_name},
+    ).mappings().all()
+
+    return {
+        "module_name": module["module_name"],
+        "article_content": module["article_content"],
+        "article_summary": module["article_summary"],
+        "difficulty": module["difficulty"],
+        "quiz_questions": [dict(q) for q in questions],
+    }
+
+
+@app.post("/users/{user_id}/quiz/submit", response_model=schemas.QuizSubmitResponse)
+def submit_quiz(user_id: uuid.UUID, payload: schemas.QuizSubmitRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    questions = db.execute(
+        text("""
+            SELECT id, question, correct_answer, explanation_correct,
+                   explanation_wrong_a, explanation_wrong_b,
+                   explanation_wrong_c, explanation_wrong_d
+            FROM quiz_questions
+            WHERE module_name = :module_name
+            ORDER BY created_at
+        """),
+        {"module_name": payload.module_name},
+    ).mappings().all()
+    if not questions:
+        raise HTTPException(status_code=404, detail="Learning module not found")
+
+    wrong_explanation_columns = {
+        "a": "explanation_wrong_a",
+        "b": "explanation_wrong_b",
+        "c": "explanation_wrong_c",
+        "d": "explanation_wrong_d",
+    }
+
+    results = []
+    score = 0
+    for q in questions:
+        question_id = str(q["id"])
+        raw_answer = payload.answers.get(question_id)
+        your_answer = raw_answer.lower() if raw_answer else None
+        is_correct = your_answer == q["correct_answer"]
+        if is_correct:
+            score += 1
+            explanation = q["explanation_correct"]
+        elif your_answer in wrong_explanation_columns:
+            explanation = q[wrong_explanation_columns[your_answer]] or q["explanation_correct"]
+        else:
+            explanation = q["explanation_correct"]
+
+        results.append({
+            "question_id": question_id,
+            "question": q["question"],
+            "your_answer": your_answer,
+            "correct_answer": q["correct_answer"],
+            "is_correct": is_correct,
+            "explanation": explanation,
+        })
+
+    total = len(questions)
+    passed = score >= 7
+    xp_awarded = 100 if score == 10 else 75 if passed else 0
+
+    db.execute(
+        text("""
+            INSERT INTO quiz_attempts (user_id, module_name, score, total_questions, passed, xp_awarded)
+            VALUES (:user_id, :module_name, :score, :total_questions, :passed, :xp_awarded)
+        """),
+        {
+            "user_id": str(user_id),
+            "module_name": payload.module_name,
+            "score": score,
+            "total_questions": total,
+            "passed": passed,
+            "xp_awarded": xp_awarded,
+        },
+    )
+
+    if passed:
+        db.execute(
+            text("""
+                INSERT INTO lesson_completions (user_id, module_step, module_name, xp_earned)
+                VALUES (:user_id, :module_step, :module_name, :xp_earned)
+                ON CONFLICT (user_id, module_step) DO NOTHING
+            """),
+            {
+                "user_id": str(user_id),
+                "module_step": payload.module_step,
+                "module_name": payload.module_name,
+                "xp_earned": xp_awarded,
+            },
+        )
+
+    db.commit()
+
+    return {
+        "score": score,
+        "total": total,
+        "passed": passed,
+        "xp_awarded": xp_awarded,
+        "results": results,
+    }
 
 
 # ============================================================
