@@ -92,7 +92,7 @@ Component score breakdown (out of max points):
 Specific personalization flags from scores:
 {f"- LOW SAVINGS CUSHION: Add 'Emergency Fund Building' as module 1" if score_breakdown.get('savings_cushion', 10) < 5 else ""}
 {f"- SHORT TIME HORIZON: Prioritize liquid investments and capital preservation" if score_breakdown.get('time_horizon', 20) < 15 else ""}
-{f"- LOW INVESTABLE INCOME: Add 'Budgeting and SIP Basics' early in path" if score_breakdown.get('pct_investable', 5) < 3 else ""}
+{f"- LOW INVESTABLE INCOME: Add 'SIP and Rupee Cost Averaging' early in path" if score_breakdown.get('pct_investable', 5) < 3 else ""}
 """
 
     behavior_context = ""
@@ -113,10 +113,10 @@ Behavioral flags detected from trading history:
 {chr(10).join(f"- {flag.upper()}: address this in learning path" for flag in behavior_flags)}
 
 Specific module requirements based on behavioral flags:
-{f"- PANIC_SELLING detected: Include 'Managing Market Volatility' and 'Emotional Investing Pitfalls' modules" if 'panic_selling' in behavior_flags else ""}
+{f"- PANIC_SELLING detected: Include 'Understanding Market Volatility' module" if 'panic_selling' in behavior_flags else ""}
 {f"- DISPOSITION_BIAS detected: Include 'When to Sell: Cutting Losses Early' module" if 'disposition_bias' in behavior_flags else ""}
-{f"- HIGH_CONCENTRATION detected: Include 'Portfolio Diversification' as priority module" if 'high_concentration' in behavior_flags else ""}
-{f"- OVER_TRADING detected: Include 'Cost of Trading' and 'Long-Term Investing Benefits' modules" if 'over_trading' in behavior_flags else ""}
+{f"- HIGH_CONCENTRATION detected: Include 'What is Diversification?' as priority module" if 'high_concentration' in behavior_flags else ""}
+{f"- OVER_TRADING detected: Include 'SIP and Rupee Cost Averaging' and 'Risk vs Return' modules" if 'over_trading' in behavior_flags else ""}
 """
 
     return f"""You are a financial literacy curriculum designer for a retail investing education platform.
@@ -132,11 +132,23 @@ USER RISK PROFILE:
 {score_breakdown_section}{behavior_context}{behavior_flags_section}
 {f"User already has existing investments (FD, PPF, stocks, property). Their FinSight virtual portfolio can focus on growth since they have a conservative base elsewhere." if existing_investments else "User has no existing investments — include foundational safety-first modules."}
 
-AVAILABLE MODULES (you MUST only use titles from this list exactly as written):
-{module_list}
+IMPORTANT: You MUST select modules ONLY from this exact list.
+Use the exact names as written — no variations, no paraphrasing:
+
+1. Emergency Fund Building
+2. SIP and Rupee Cost Averaging
+3. What is a Mutual Fund?
+4. What is Diversification?
+5. Risk vs Return
+6. Index Funds
+7. Understanding Market Volatility
+8. When to Sell: Cutting Losses Early
+
+Select exactly 6 modules from this list appropriate for the user.
+The module field in your JSON response must be one of these exact strings.
 
 INSTRUCTIONS:
-1. Select 4 to 6 modules from the list above appropriate for this user's risk profile.
+1. Select exactly 6 modules from the list above appropriate for this user's risk profile.
 2. Order them from foundational to advanced.
 3. For each module decide type: "fixed" (guided lesson) or "sandbox" (user runs their own backtest).
 4. Assign difficulty: "easy", "medium", or "hard".

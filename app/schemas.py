@@ -145,6 +145,7 @@ class LearningModuleOut(BaseModel):
     article_content: str
     article_summary: list[str]
     difficulty: str
+    module_step: int = 1
     quiz_questions: list[QuizQuestionOut]
 
 

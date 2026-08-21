@@ -18,6 +18,17 @@ from .learning_agent import generate_answer
 from .behavior_engine import analyze_simulation
 from .strategy_agent import generate_strategy
 
+MODULES_ORDER = [
+    "Emergency Fund Building",
+    "SIP and Rupee Cost Averaging",
+    "What is a Mutual Fund?",
+    "What is Diversification?",
+    "Risk vs Return",
+    "Index Funds",
+    "Understanding Market Volatility",
+    "When to Sell: Cutting Losses Early",
+]
+
 app = FastAPI(title="FinSight API", version="0.1.0")
 
 app.add_middleware(
@@ -1084,11 +1095,14 @@ def get_learning_module(module_name: str, db: Session = Depends(get_db)):
         {"module_name": module_name},
     ).mappings().all()
 
+    module_step = MODULES_ORDER.index(module_name) + 1 if module_name in MODULES_ORDER else 1
+
     return {
         "module_name": module["module_name"],
         "article_content": module["article_content"],
         "article_summary": module["article_summary"],
         "difficulty": module["difficulty"],
+        "module_step": module_step,
         "quiz_questions": [dict(q) for q in questions],
     }
 
@@ -1146,7 +1160,12 @@ def submit_quiz(user_id: uuid.UUID, payload: schemas.QuizSubmitRequest, db: Sess
 
     total = len(questions)
     passed = score >= 7
-    xp_awarded = 100 if score == 10 else 75 if passed else 0
+    if score == total:                  # perfect score
+        xp_awarded = 150
+    elif score >= 7:                    # passed (7 or more correct)
+        xp_awarded = 100
+    else:                                # failed
+        xp_awarded = 0
 
     db.execute(
         text("""
