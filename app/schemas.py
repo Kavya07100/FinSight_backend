@@ -172,6 +172,13 @@ class QuizSubmitResponse(BaseModel):
     results: list[QuizResultItem]
 
 
+class XPOut(BaseModel):
+    total_xp: int
+    level: int
+    xp_to_next_level: int
+    level_label: str
+
+
 # ============================================================
 # Strategy Agent
 # ============================================================

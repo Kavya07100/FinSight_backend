@@ -14,60 +14,28 @@ import os
 import json
 from dotenv import load_dotenv
 from groq import Groq
-from sqlalchemy import text
-
-from app.database import engine
 
 load_dotenv()
 
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
-GENERATION_MODEL = "llama-3.3-70b-versatile"
+# llama-3.3-70b-versatile was retired from Groq's catalog (calls started
+# 404ing with model_not_found) -- gpt-oss-120b is the current strongest
+# general-purpose model on this account, see `client.models.list()`.
+GENERATION_MODEL = "openai/gpt-oss-120b"
 
 
 # ------------------------------------------------------------------
-# Step 1: Retrieve available content titles from embedded_content
-# ------------------------------------------------------------------
-def retrieve_available_modules(category: str, top_k: int = 12) -> list[dict]:
-    """
-    Pulls a broad set of content from embedded_content so the Strategy Agent
-    knows what modules actually exist to assign.
-    """
-    difficulty_filter = {
-        "conservative": ("easy",),
-        "moderate": ("easy", "medium"),
-        "moderate-aggressive": ("easy", "medium", "hard"),
-        "aggressive": ("medium", "hard"),
-    }.get(category, ("easy", "medium", "hard"))
-
-    placeholders = ", ".join(f":d{i}" for i in range(len(difficulty_filter)))
-    params = {f"d{i}": v for i, v in enumerate(difficulty_filter)}
-    params["top_k"] = top_k
-
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(f"""
-                SELECT title, tags, difficulty
-                FROM embedded_content
-                WHERE difficulty IN ({placeholders})
-                ORDER BY difficulty ASC, created_at ASC
-                LIMIT :top_k
-            """),
-            params,
-        ).fetchall()
-
-    return [
-        {"title": r.title, "tags": r.tags, "difficulty": r.difficulty}
-        for r in rows
-    ]
-
-
-# ------------------------------------------------------------------
-# Step 2: Build the prompt and call Groq
+# Build the prompt and call Groq
+#
+# The module list used to be pulled dynamically from embedded_content, but
+# the prompt now hardcodes the fixed 8-module list (see IMPORTANT section
+# below) so every generated path uses module names that actually exist in
+# learning_modules/quiz_questions. That DB round-trip is gone with it --
+# one less thing that could fail before Groq is even called.
 # ------------------------------------------------------------------
 def _build_strategy_prompt(
     risk_profile: dict,
     category: str,
-    module_list: str,
     behavior_score: float | None,
     behavior_flags: list | None,
     score_breakdown: dict | None,
@@ -171,6 +139,61 @@ Respond with ONLY a JSON array, no explanation, no markdown, no backticks. Examp
 ]"""
 
 
+# If Groq is unreachable, times out, or returns something we can't parse
+# into a usable module list, fall back to this fixed 6-module path rather
+# than surfacing a 500 to the frontend (see generate_strategy below).
+FALLBACK_MODULES = [
+    {
+        "step": 1, "module": "Emergency Fund Building",
+        "type": "fixed", "difficulty": "easy", "xp": 100, "asset_class": None,
+        "rationale": "Build your financial foundation first.",
+    },
+    {
+        "step": 2, "module": "SIP and Rupee Cost Averaging",
+        "type": "fixed", "difficulty": "easy", "xp": 100, "asset_class": None,
+        "rationale": "Learn India's most recommended investment strategy.",
+    },
+    {
+        "step": 3, "module": "What is a Mutual Fund?",
+        "type": "fixed", "difficulty": "easy", "xp": 100, "asset_class": None,
+        "rationale": "Understand the most popular Indian investment vehicle.",
+    },
+    {
+        "step": 4, "module": "What is Diversification?",
+        "type": "fixed", "difficulty": "easy", "xp": 100, "asset_class": None,
+        "rationale": "Learn to spread risk across investments.",
+    },
+    {
+        "step": 5, "module": "Risk vs Return",
+        "type": "fixed", "difficulty": "medium", "xp": 100, "asset_class": None,
+        "rationale": "Understand the fundamental trade-off in investing.",
+    },
+    {
+        "step": 6, "module": "Index Funds",
+        "type": "fixed", "difficulty": "medium", "xp": 100, "asset_class": None,
+        "rationale": "Discover passive investing for steady long-term growth.",
+    },
+]
+
+
+def _extract_module_list(parsed):
+    """
+    Groq is asked for a bare JSON array but sometimes wraps it in an object
+    instead (e.g. {"modules": [...]}) despite the prompt's instructions.
+    Unwrap those common shapes; raise if nothing usable is found.
+    """
+    if isinstance(parsed, list):
+        return parsed
+
+    if isinstance(parsed, dict):
+        for key in ("modules", "path", "learning_path", "steps"):
+            value = parsed.get(key)
+            if isinstance(value, list):
+                return value
+
+    raise ValueError(f"Groq response was not a JSON array or a dict wrapping one (got {type(parsed).__name__})")
+
+
 def generate_strategy(
     risk_profile: dict,
     behavior_score: float | None = None,
@@ -181,53 +204,55 @@ def generate_strategy(
     """
     Core Strategy Agent call using Groq/Llama.
     Returns list of module dicts (the path) ready to store as JSONB.
+
+    Any failure -- Groq being unreachable, an unexpected response shape, or
+    invalid JSON -- falls back to FALLBACK_MODULES instead of raising, so a
+    Groq hiccup never turns into a 500 on POST /users/{user_id}/strategy.
     """
     category = risk_profile.get("category", "moderate")
-    available_modules = retrieve_available_modules(category)
 
-    if not available_modules:
-        return [
-            {
-                "step": 1,
-                "module": "No content available",
-                "type": "fixed",
-                "difficulty": "easy",
-                "xp": 10,
-                "asset_class": None,
-                "rationale": "No educational content found in the database.",
-            }
-        ]
+    try:
+        prompt = _build_strategy_prompt(
+            risk_profile, category, behavior_score, behavior_flags, score_breakdown,
+            existing_investments,
+        )
 
-    module_list = "\n".join(
-        f"- \"{m['title']}\" (difficulty: {m['difficulty']}, tags: {', '.join(m['tags'] or [])})"
-        for m in available_modules
-    )
+        response = client.chat.completions.create(
+            model=GENERATION_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a financial education curriculum designer. You always respond with valid JSON arrays only, no other text.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+        )
 
-    prompt = _build_strategy_prompt(
-        risk_profile, category, module_list, behavior_score, behavior_flags, score_breakdown,
-        existing_investments,
-    )
+        raw = response.choices[0].message.content.strip()
+        # Best-effort logging only -- some terminals (Windows cp1252) can't
+        # encode characters Groq sometimes includes (curly quotes, en-dashes),
+        # and a print() crash here must never take down a response that
+        # otherwise parsed fine.
+        try:
+            print(f"[strategy_agent] Raw Groq response:\n{raw}")
+        except UnicodeEncodeError:
+            print(f"[strategy_agent] Raw Groq response (non-ASCII replaced):\n{raw.encode('ascii', 'replace').decode('ascii')}")
 
-    response = client.chat.completions.create(
-        model=GENERATION_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a financial education curriculum designer. You always respond with valid JSON arrays only, no other text.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.3,
-    )
+        # Strip markdown code fences if the model adds them despite instructions
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
 
-    raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
+        path = _extract_module_list(parsed)
 
-    # Strip markdown code fences if the model adds them despite instructions
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+        if not path:
+            raise ValueError("Groq returned an empty module list")
 
-    path = json.loads(raw)
-    return path
+        return path
+    except Exception as exc:
+        print(f"[strategy_agent] Falling back to default learning path -- {type(exc).__name__}: {exc}")
+        return FALLBACK_MODULES

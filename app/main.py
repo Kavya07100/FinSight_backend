@@ -1300,6 +1300,42 @@ def get_latest_strategy(user_id: uuid.UUID, db: Session = Depends(get_db)):
     return config
 
 
+@app.get("/users/{user_id}/xp", response_model=schemas.XPOut)
+def get_user_xp(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    # Sum all XP from passed quiz attempts
+    result = db.execute(text("""
+        SELECT COALESCE(SUM(xp_awarded), 0) as total_xp
+        FROM quiz_attempts
+        WHERE user_id = :user_id AND passed = true
+    """), {"user_id": str(user_id)}).mappings().first()
+
+    total_xp = int(result["total_xp"]) if result else 0
+
+    # Calculate level
+    if total_xp >= 2000:
+        level = 5
+        xp_to_next = 0
+    elif total_xp >= 1200:
+        level = 4
+        xp_to_next = 2000 - total_xp
+    elif total_xp >= 800:
+        level = 3
+        xp_to_next = 1200 - total_xp
+    elif total_xp >= 300:
+        level = 2
+        xp_to_next = 800 - total_xp
+    else:
+        level = 1
+        xp_to_next = 300 - total_xp
+
+    return {
+        "total_xp": total_xp,
+        "level": level,
+        "xp_to_next_level": xp_to_next,
+        "level_label": f"Level {level}",
+    }
+
+
 # news_agent.py stores articles as a single `content` string ending in
 # "(Source: <name>. Read more: <url>)" -- see build_content() there. This
 # pulls those two pieces back out so the API can return structured fields
